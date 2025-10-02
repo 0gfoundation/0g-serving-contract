@@ -3,6 +3,7 @@ pragma solidity >=0.8.0 <0.9.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "../utils/Initializable.sol";
 import "./InferenceAccount.sol";
 import "./InferenceService.sol";
@@ -26,7 +27,7 @@ enum SettlementStatus {
     INVALID_SIGNATURE     // 5: Signature verification failed
 }
 
-contract InferenceServing is Ownable, Initializable, IServing {
+contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
     using AccountLibrary for AccountLibrary.AccountMap;
     using ServiceLibrary for ServiceLibrary.ServiceMap;
 
@@ -50,6 +51,7 @@ contract InferenceServing is Ownable, Initializable, IServing {
     );
     event ServiceRemoved(address indexed service);
     event TEESettlementResult(address indexed user, SettlementStatus status, uint256 unsettledAmount);
+    event BatchBalanceUpdated(address[] users, uint256[] balances, uint256[] pendingRefunds);
     error InvalidTEESignature(string reason);
 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
@@ -206,12 +208,11 @@ contract InferenceServing is Ownable, Initializable, IServing {
         account.balance -= amount;
         ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
-        payable(msg.sender).transfer(amount);
     }
 
     function settleFeesWithTEE(
         TEESettlementData[] calldata settlements
-    ) external returns (
+    ) external nonReentrant returns (
         address[] memory failedUsers,
         SettlementStatus[] memory failureReasons,
         address[] memory partialUsers, 
@@ -226,6 +227,7 @@ contract InferenceServing is Ownable, Initializable, IServing {
         
         uint failedCount = 0;
         uint partialCount = 0;
+        uint256 totalTransferAmount = 0;
 
         for (uint i = 0; i < settlements.length; i++) {
             TEESettlementData calldata settlement = settlements[i];
@@ -236,7 +238,8 @@ contract InferenceServing is Ownable, Initializable, IServing {
                 continue;
             }
             
-            (SettlementStatus status, uint256 unsettledAmount) = _processTEESettlement(settlement);
+            (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) = _processTEESettlement(settlement);
+            totalTransferAmount += settledAmount;
             emit TEESettlementResult(settlement.user, status, unsettledAmount);
             
             if (status == SettlementStatus.SUCCESS) {
@@ -256,24 +259,29 @@ contract InferenceServing is Ownable, Initializable, IServing {
             mstore(partialUsers, partialCount)
             mstore(partialAmounts, partialCount)
         }
+
+        // Batch transfer all settled amounts at once
+        if (totalTransferAmount > 0) {
+            payable(msg.sender).transfer(totalTransferAmount);
+        }
     }
 
-    function _processTEESettlement(TEESettlementData calldata settlement) private returns (SettlementStatus status, uint256 unsettledAmount) {
+    function _processTEESettlement(TEESettlementData calldata settlement) private returns (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) {
         Account storage account = accountMap.getAccount(settlement.user, msg.sender);
 
         // Validate TEE signer
         if (account.teeSignerAddress == address(0)) {
-            return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee);
+            return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee, 0);
         }
 
         // Validate nonce
         if (account.nonce >= settlement.nonce) {
-            return (SettlementStatus.INVALID_NONCE, settlement.totalFee);
+            return (SettlementStatus.INVALID_NONCE, settlement.totalFee, 0);
         }
 
         // Validate signature
         if (!_verifySignature(settlement, account.teeSignerAddress)) {
-            return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee);
+            return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee, 0);
         }
 
         // All validations passed, update nonce
@@ -291,9 +299,9 @@ contract InferenceServing is Ownable, Initializable, IServing {
 
         // Return appropriate status
         if (unsettled > 0) {
-            return (SettlementStatus.PARTIAL, unsettled);
+            return (SettlementStatus.PARTIAL, unsettled, toSettle);
         } else {
-            return (SettlementStatus.SUCCESS, 0);
+            return (SettlementStatus.SUCCESS, 0, toSettle);
         }
     }
 

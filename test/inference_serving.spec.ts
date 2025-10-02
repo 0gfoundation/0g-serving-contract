@@ -871,7 +871,7 @@ describe("Inference Serving", () => {
                 console.log(`Gas efficiency: ${((gasEstimate - actualGas) * 100n / gasEstimate).toString()}% under estimate`);
                 
                 // Assert reasonable gas limits
-                expect(actualGas).to.be.below(1500000); // Should be under 1.5M gas for 50 settlements
+                expect(actualGas).to.be.below(900000); // Should be under 0.9M gas for 50 settlements
                 expect(actualGas / BigInt(batchSize)).to.be.below(30000); // Should be under 30k gas per settlement
                 
                 // Verify the batch was processed successfully
