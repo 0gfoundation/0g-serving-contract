@@ -74,7 +74,7 @@ const config: HardhatUserConfig = {
             ],
         },
         zgTestnetV4: {
-            url: "https://evmrpc-testnet.0g.ai/0YbHuCd7znb4kKjLrTcGQw5BZKxKzDUeV55JXjaoG8W2",
+            url: "https://evmrpc-testnet.0g.ai",
             accounts: [ZG_TESTNET_V4_PRIVATE_KEY],
             chainId: 16602,
             gasPrice: 12000000000,
