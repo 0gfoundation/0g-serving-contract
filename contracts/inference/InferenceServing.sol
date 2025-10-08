@@ -3,6 +3,7 @@ pragma solidity >=0.8.0 <0.9.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "../utils/Initializable.sol";
 import "./InferenceAccount.sol";
 import "./InferenceService.sol";
@@ -17,7 +18,16 @@ struct TEESettlementData {
     bytes signature;
 }
 
-contract InferenceServing is Ownable, Initializable, IServing {
+enum SettlementStatus {
+    SUCCESS,              // 0: Full settlement success
+    PARTIAL,              // 1: Partial settlement (insufficient balance)
+    PROVIDER_MISMATCH,    // 2: Provider mismatch
+    NO_TEE_SIGNER,        // 3: TEE signer not acknowledged
+    INVALID_NONCE,        // 4: Invalid or duplicate nonce
+    INVALID_SIGNATURE     // 5: Signature verification failed
+}
+
+contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
     using AccountLibrary for AccountLibrary.AccountMap;
     using ServiceLibrary for ServiceLibrary.ServiceMap;
 
@@ -40,10 +50,8 @@ contract InferenceServing is Ownable, Initializable, IServing {
         string verifiability
     );
     event ServiceRemoved(address indexed service);
-    event TEESettlementCompleted(address indexed provider, uint successCount, uint failedCount);
-    event TEESettlementFailed(address indexed provider, address indexed user, string reason);
-
-    error InvalidProofInputs(string reason);
+    event TEESettlementResult(address indexed user, SettlementStatus status, uint256 unsettledAmount);
+    event BatchBalanceUpdated(address[] users, uint256[] balances, uint256[] pendingRefunds);
     error InvalidTEESignature(string reason);
 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
@@ -178,10 +186,6 @@ contract InferenceServing is Ownable, Initializable, IServing {
     function _settleFees(Account storage account, uint amount) private {
         if (amount > (account.balance - account.pendingRefund)) {
             uint remainingFee = amount - (account.balance - account.pendingRefund);
-            if (account.pendingRefund < remainingFee) {
-                revert InvalidProofInputs("insufficient balance in pendingRefund");
-            }
-
             account.pendingRefund -= remainingFee;
             for (int i = int(account.refunds.length - 1); i >= 0; i--) {
                 Refund storage refund = account.refunds[uint(i)];
@@ -204,120 +208,231 @@ contract InferenceServing is Ownable, Initializable, IServing {
         account.balance -= amount;
         ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
-        payable(msg.sender).transfer(amount);
+    }
+
+    // Static view function for previewing settlement results without state changes
+    function previewSettlementResults(
+        TEESettlementData[] calldata settlements
+    ) external view returns (
+        address[] memory failedUsers,
+        SettlementStatus[] memory failureReasons,
+        address[] memory partialUsers, 
+        uint256[] memory partialAmounts
+    ) {
+        require(settlements.length > 0, "No settlements provided");
+
+        failedUsers = new address[](settlements.length);
+        failureReasons = new SettlementStatus[](settlements.length);
+        partialUsers = new address[](settlements.length);
+        partialAmounts = new uint256[](settlements.length);
+        
+        uint failedCount = 0;
+        uint partialCount = 0;
+
+        for (uint i = 0; i < settlements.length; i++) {
+            TEESettlementData calldata settlement = settlements[i];
+            
+            if (settlement.provider != msg.sender) {
+                _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, SettlementStatus.PROVIDER_MISMATCH);
+                continue;
+            }
+            
+            (SettlementStatus status, uint256 unsettledAmount) = _previewTEESettlement(settlement);
+            
+            if (status == SettlementStatus.SUCCESS) {
+                continue;
+            }
+            
+            if (status == SettlementStatus.PARTIAL) {
+                _recordPartial(partialUsers, partialAmounts, partialCount++, settlement.user, unsettledAmount);
+                continue;
+            }
+            _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, status);
+        }
+
+        assembly {
+            mstore(failedUsers, failedCount)
+            mstore(failureReasons, failedCount)
+            mstore(partialUsers, partialCount)
+            mstore(partialAmounts, partialCount)
+        }
     }
 
     function settleFeesWithTEE(
         TEESettlementData[] calldata settlements
-    ) external returns (address[] memory failedUsers) {
+    ) external nonReentrant returns (
+        address[] memory failedUsers,
+        SettlementStatus[] memory failureReasons,
+        address[] memory partialUsers, 
+        uint256[] memory partialAmounts
+    ) {
         require(settlements.length > 0, "No settlements provided");
 
-        address[] memory tempFailedUsers = new address[](settlements.length);
+        failedUsers = new address[](settlements.length);
+        failureReasons = new SettlementStatus[](settlements.length);
+        partialUsers = new address[](settlements.length);
+        partialAmounts = new uint256[](settlements.length);
+        
         uint failedCount = 0;
-        uint successCount = 0;
+        uint partialCount = 0;
+        uint256 totalTransferAmount = 0;
 
         for (uint i = 0; i < settlements.length; i++) {
-            TEESettlementData memory settlement = settlements[i];
-
-            // Process settlement inline to better handle errors
-            (bool success, string memory failureReason) = _processTEESettlementInternal(settlement, msg.sender);
-
-            if (success) {
-                successCount++;
-            } else {
-                tempFailedUsers[failedCount] = settlement.user;
-                failedCount++;
-                emit TEESettlementFailed(msg.sender, settlement.user, failureReason);
+            TEESettlementData calldata settlement = settlements[i];
+            
+            if (settlement.provider != msg.sender) {
+                _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, SettlementStatus.PROVIDER_MISMATCH);
+                emit TEESettlementResult(settlement.user, SettlementStatus.PROVIDER_MISMATCH, settlement.totalFee);
+                continue;
             }
+            
+            (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) = _processTEESettlement(settlement);
+            totalTransferAmount += settledAmount;
+            emit TEESettlementResult(settlement.user, status, unsettledAmount);
+            
+            if (status == SettlementStatus.SUCCESS) {
+                continue;
+            }
+            
+            if (status == SettlementStatus.PARTIAL) {
+                _recordPartial(partialUsers, partialAmounts, partialCount++, settlement.user, unsettledAmount);
+                continue;
+            }
+            _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, status);
         }
 
-        // Create array with exact size for failed users
-        failedUsers = new address[](failedCount);
-        for (uint i = 0; i < failedCount; i++) {
-            failedUsers[i] = tempFailedUsers[i];
+        assembly {
+            mstore(failedUsers, failedCount)
+            mstore(failureReasons, failedCount)
+            mstore(partialUsers, partialCount)
+            mstore(partialAmounts, partialCount)
         }
 
-        // Emit completion event
-        emit TEESettlementCompleted(msg.sender, successCount, failedCount);
+        // Batch transfer all settled amounts at once
+        if (totalTransferAmount > 0) {
+            payable(msg.sender).transfer(totalTransferAmount);
+        }
     }
 
-    function _processTEESettlementInternal(
-        TEESettlementData memory settlement,
-        address provider
-    ) private returns (bool success, string memory failureReason) {
-        // Verify provider matches
-        if (settlement.provider != provider) {
-            return (false, "Provider mismatch");
-        }
+    // View function to preview settlement without state changes
+    function _previewTEESettlement(TEESettlementData calldata settlement) private view returns (SettlementStatus status, uint256 unsettledAmount) {
+        Account storage account = accountMap.getAccount(settlement.user, msg.sender);
 
-        // Get account to verify provider's TEE signer
-        Account storage account = accountMap.getAccount(settlement.user, provider);
-
-        // Verify that the account has acknowledged a TEE signer
+        // Validate TEE signer
         if (account.teeSignerAddress == address(0)) {
-            return (false, "TEE signer not acknowledged");
+            return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee);
         }
 
-        // Verify TEE signature
-        bytes32 messageHash = keccak256(
-            abi.encodePacked(
-                settlement.requestsHash,
-                settlement.nonce,
-                settlement.provider,
-                settlement.user,
-                settlement.totalFee
-            )
-        );
-
-        // Add Ethereum Signed Message prefix to match what ethers.js signMessage expects
-        bytes32 ethSignedMessageHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
-
-        // Recover signer address from signature
-        address recoveredSigner = recoverSigner(ethSignedMessageHash, settlement.signature);
-
-        // Verify the signature is from the acknowledged TEE signer
-        if (recoveredSigner != account.teeSignerAddress) {
-            return (false, "Invalid TEE signer");
-        }
-
-        // Check that nonce is greater than the recorded nonce
+        // Validate nonce (check if nonce would be valid)
         if (account.nonce >= settlement.nonce) {
-            return (false, "Nonce already processed");
+            return (SettlementStatus.INVALID_NONCE, settlement.totalFee);
         }
 
-        // Check balance sufficiency
-        if (account.balance < settlement.totalFee) {
-            return (false, "Insufficient balance");
+        // Validate signature
+        if (!_verifySignature(settlement, account.teeSignerAddress)) {
+            return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee);
         }
 
-        // Update account nonce
+        // Calculate settlement amounts (without modifying state)
+        uint256 balance = account.balance;
+        uint256 unsettled = settlement.totalFee > balance ? settlement.totalFee - balance : 0;
+        
+        // Return appropriate status
+        if (unsettled > 0) {
+            return (SettlementStatus.PARTIAL, unsettled);
+        } else {
+            return (SettlementStatus.SUCCESS, 0);
+        }
+    }
+
+    function _processTEESettlement(TEESettlementData calldata settlement) private returns (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) {
+        Account storage account = accountMap.getAccount(settlement.user, msg.sender);
+
+        // Validate TEE signer
+        if (account.teeSignerAddress == address(0)) {
+            return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee, 0);
+        }
+
+        // Validate nonce
+        if (account.nonce >= settlement.nonce) {
+            return (SettlementStatus.INVALID_NONCE, settlement.totalFee, 0);
+        }
+
+        // Validate signature
+        if (!_verifySignature(settlement, account.teeSignerAddress)) {
+            return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee, 0);
+        }
+
+        // All validations passed, update nonce
         account.nonce = settlement.nonce;
 
-        // Settle the fees
-        _settleFees(account, settlement.totalFee);
+        // Calculate settlement amounts
+        uint256 balance = account.balance;
+        uint256 toSettle = settlement.totalFee > balance ? balance : settlement.totalFee;
+        uint256 unsettled = settlement.totalFee > balance ? settlement.totalFee - balance : 0;
+        
+        // Settle what we can
+        if (toSettle > 0) {
+            _settleFees(account, toSettle);
+        }
 
-        return (true, "");
+        // Return appropriate status
+        if (unsettled > 0) {
+            return (SettlementStatus.PARTIAL, unsettled, toSettle);
+        } else {
+            return (SettlementStatus.SUCCESS, 0, toSettle);
+        }
     }
 
-    function recoverSigner(bytes32 ethSignedMessageHash, bytes memory signature) internal pure returns (address) {
-        require(signature.length == 65, "Invalid signature length");
-
+    function _verifySignature(TEESettlementData calldata settlement, address expectedSigner) private pure returns (bool) {
+        bytes calldata signature = settlement.signature;
+        if (signature.length != 65) return false;
+        
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            settlement.requestsHash,
+            settlement.nonce,
+            settlement.provider,
+            settlement.user,
+            settlement.totalFee
+        ));
+        
+        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
+        
         bytes32 r;
         bytes32 s;
         uint8 v;
-
+        
         assembly {
-            // Extract r, s, v from signature
-            r := mload(add(signature, 32))
-            s := mload(add(signature, 64))
-            v := byte(0, mload(add(signature, 96)))
+            r := calldataload(add(signature.offset, 0))
+            s := calldataload(add(signature.offset, 32))
+            v := byte(0, calldataload(add(signature.offset, 64)))
         }
-
-        // Handle both possible v values (27/28 or 0/1)
-        if (v < 27) {
-            v += 27;
-        }
-
-        return ecrecover(ethSignedMessageHash, v, r, s);
+        
+        if (v < 27) v += 27;
+        
+        return ecrecover(ethSignedHash, v, r, s) == expectedSigner;
     }
+
+    function _recordFailure(
+        address[] memory failedUsers,
+        SettlementStatus[] memory failureReasons,
+        uint index,
+        address user,
+        SettlementStatus reason
+    ) private pure {
+        failedUsers[index] = user;
+        failureReasons[index] = reason;
+    }
+
+    function _recordPartial(
+        address[] memory partialUsers,
+        uint256[] memory partialAmounts,
+        uint index,
+        address user,
+        uint256 amount
+    ) private pure {
+        partialUsers[index] = user;
+        partialAmounts[index] = amount;
+    }
+
 }

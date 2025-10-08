@@ -152,7 +152,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         address provider,
         string memory serviceTypeStr,
         uint amount
-    ) external nonReentrant withLedgerLock(msg.sender) {
+    ) external withLedgerLock(msg.sender) {
         Ledger storage ledger = _get(msg.sender);
         (address servingAddress, IServing serving, bool isInference) = _getServiceDetails(serviceTypeStr);
 
@@ -203,7 +203,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     function retrieveFund(
         address[] memory providers,
         string memory serviceType
-    ) external nonReentrant withLedgerLock(msg.sender) {
+    ) external withLedgerLock(msg.sender) {
         if (providers.length > MAX_PROVIDERS_PER_BATCH) {
             revert TooManyProviders(providers.length, MAX_PROVIDERS_PER_BATCH);
         }
