@@ -198,10 +198,6 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing 
         return accountMap.getDeliverables(user, provider);
     }
 
-    function acknowledgeDeliverable(address user, address provider, string calldata id) external {
-        accountMap.acknowledgeDeliverable(user, provider, id);
-    }
-
     function settleFees(VerifierInput calldata verifierInput) external nonReentrant {
         Account storage account = accountMap.getAccount(verifierInput.user, msg.sender);
 
