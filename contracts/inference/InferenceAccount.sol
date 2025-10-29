@@ -9,7 +9,6 @@ struct Account {
     uint nonce;
     uint balance;
     uint pendingRefund;
-    uint[2] signer;
     Refund[] refunds;
     string additionalInfo;
     uint[2] providerPubKey;
@@ -173,7 +172,6 @@ library AccountLibrary {
         AccountMap storage map,
         address user,
         address provider,
-        uint[2] calldata signer,
         uint amount,
         string memory additionalInfo
     ) internal returns (uint, uint) {
@@ -182,7 +180,7 @@ library AccountLibrary {
             revert AccountExists(user, provider);
         }
 
-        _set(map, key, user, provider, signer, amount, additionalInfo);
+        _set(map, key, user, provider, amount, additionalInfo);
 
         map._providerIndex[provider].add(key);
         map._userIndex[user].add(key);
@@ -436,7 +434,6 @@ library AccountLibrary {
         bytes32 key,
         address user,
         address provider,
-        uint[2] calldata signer,
         uint balance,
         string memory additionalInfo
     ) internal {
@@ -444,7 +441,6 @@ library AccountLibrary {
         account.balance = balance;
         account.user = user;
         account.provider = provider;
-        account.signer = signer;
         account.additionalInfo = additionalInfo;
         account.validRefundsLength = 0; // Initialize validRefundsLength
         map._keys.add(key);
