@@ -1,47 +1,47 @@
-# 模块化部署指南
+# Modular Deployment Guide
 
-**重要说明**：虽然此仓库包含多个服务的代码（inference、fine-tuning），但每个版本分支只针对特定服务。例如在 `inference-v1` 分支中，fine-tuning 相关代码应被忽略。
+**Important Note**: Although this repository contains code for multiple services (inference, fine-tuning), each version tag is specific to a particular service. For example, in the `inference-v1` tag, fine-tuning related code should be ignored.
 
-## 场景 1：首次部署合约
+## Scenario 1: Initial Contract Deployment
 
-### 1.1 部署 LedgerManager
+### 1.1 Deploy LedgerManager
 
 ```bash
-# 部署 LedgerManager
+# Deploy LedgerManager
 npx hardhat deploy --tags ledger --network zgTestnetV4
 
-# 验证 LedgerManager 合约
+# Verify LedgerManager contract
 IMPL=$(cat deployments/zgTestnetV4/LedgerManagerImpl.json | jq -r '.address')
 BEACON=$(cat deployments/zgTestnetV4/LedgerManagerBeacon.json | jq -r '.address')
 PROXY=$(cat deployments/zgTestnetV4/LedgerManager.json | jq -r '.address')
 IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
 
-# 导入到 OpenZeppelin
+# Import to OpenZeppelin
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 ```
 
-### 1.2 部署 Inference v1.0
+### 1.2 Deploy Inference v1.0
 
 ```bash
-# 创建版本分支
+# Create version branch
 git checkout -b inference-v1.0
 
-# 部署合约
+# Deploy contract
 SERVICE_TYPE=inference SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
 
-# 验证合约
+# Verify contract
 IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
 BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
 PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
 IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
 
-# 清理其他服务的 deployment 文件
+# Clean other service deployment files
 rm deployments/zgTestnetV4/FineTuningServing_*.json 2>/dev/null || true
 
-# 导入到 OpenZeppelin
+# Import to OpenZeppelin
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 
-# 创建版本信息文件
+# Create version info file
 cat > VERSION.json << EOF
 {
   "service": "inference",
@@ -51,38 +51,38 @@ cat > VERSION.json << EOF
 }
 EOF
 
-# 提交并打标签
+# Commit and tag
 git add deployments/ .openzeppelin/ VERSION.json
 git commit -m "Deploy inference v1.0"
 git tag inference-v1.0
 ```
 
-## 场景 2：部署新版本（inference v2.0）
+## Scenario 2: Deploy New Version (inference v2.0)
 
 ```bash
-# 从 main 分支创建新版本分支
+# Create new version branch from main
 git checkout main
 git checkout -b inference-v2.0
 
-# 修改合约代码（根据需求）
+# Modify contract code (as needed)
 
-# 部署新版本
+# Deploy new version
 SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
 
-# 验证合约
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v3.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v3.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v3.0.json | jq -r '.address')
+# Verify contract
+IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v2.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v2.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v2.0.json | jq -r '.address')
 IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
 
-# 清理其他版本的 deployment 文件
+# Clean other version deployment files
 rm deployments/zgTestnetV4/InferenceServing_v1.0*.json 2>/dev/null || true
 rm deployments/zgTestnetV4/FineTuningServing_*.json 2>/dev/null || true
 
-# 导入到 OpenZeppelin
+# Import to OpenZeppelin
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 
-# 更新版本信息文件
+# Update version info file
 cat > VERSION.json << EOF
 {
   "service": "inference",
@@ -92,35 +92,35 @@ cat > VERSION.json << EOF
 }
 EOF
 
-# 提交并打标签
+# Commit and tag
 git add deployments/ .openzeppelin/ VERSION.json
 git commit -m "Deploy inference v2.0"
 git tag inference-v2.0
 ```
 
-## 场景 3：添加新服务（fine-tuning v1.0）
+## Scenario 3: Add New Service (fine-tuning v1.0)
 
 ```bash
-# 从 main 分支创建新服务分支
+# Create new service branch from main
 git checkout main
 git checkout -b fine-tuning-v1.0
 
-# 部署 fine-tuning 服务
+# Deploy fine-tuning service
 SERVICE_TYPE=fine-tuning SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
 
-# 验证合约
+# Verify contract
 IMPL=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0Impl.json | jq -r '.address')
 BEACON=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0Beacon.json | jq -r '.address')
 PROXY=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0.json | jq -r '.address')
 IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
 
-# 清理其他服务的 deployment 文件
+# Clean other service deployment files
 rm deployments/zgTestnetV4/InferenceServing_*.json 2>/dev/null || true
 
-# 导入到 OpenZeppelin
+# Import to OpenZeppelin
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 
-# 创建版本信息文件
+# Create version info file
 cat > VERSION.json << EOF
 {
   "service": "fine-tuning",
@@ -130,32 +130,30 @@ cat > VERSION.json << EOF
 }
 EOF
 
-# 提交并打标签
+# Commit and tag
 git add deployments/ .openzeppelin/ VERSION.json
 git commit -m "Deploy fine-tuning v1.0"
 git tag fine-tuning-v1.0
 ```
 
-## 场景 4：升级特定版本
+## Scenario 4: Upgrade Specific Version
 
 ```bash
-# 切换到要升级的版本 tag
+# Switch to the version tag to upgrade
 git checkout inference-v1.0
 
-# 修改合约代码
+# Modify contract code
 
-yarn compile
-
-# 验证升级兼容性
+# Validate upgrade compatibility
 npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing --network zgTestnetV4
 
-# 执行升级
+# Execute upgrade
 npx hardhat upgrade --name InferenceServing_v1.0 --artifact InferenceServing --execute true --network zgTestnetV4
 
-# 重新导入升级后的合约
+# Re-import upgraded contracts
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 
-# 更新版本信息（递增补丁版本）
+# Update version info (increment patch version)
 cat > VERSION.json << EOF
 {
   "service": "inference",
@@ -165,78 +163,78 @@ cat > VERSION.json << EOF
 }
 EOF
 
-# 提交升级信息并打新的 tag
+# Commit upgrade info and create new tag
 git add deployments/ .openzeppelin/ VERSION.json
 git commit -m "Upgrade inference v1.0 - patch 1"
 git tag inference-v1.0-1
 
-# 如果后续还有升级，继续递增：inference-v1.0-2, inference-v1.0-3 等
+# For subsequent upgrades, continue incrementing: inference-v1.0-2, inference-v1.0-3, etc.
 ```
 
-## 场景 5：设置推荐版本
+## Scenario 5: Set Recommended Version
 
 ```bash
-# 设置 inference v2.0 为推荐版本
+# Set inference v2.0 as recommended version
 SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags set-recommended --network zgTestnetV4
 ```
 
-## 场景 6：查看所有服务
+## Scenario 6: List All Services
 
 ```bash
 npx hardhat deploy --tags list-services --network zgTestnetV4
 ```
 
-## 场景 7：升级 LedgerManager（公共基础设施）
+## Scenario 7: Upgrade LedgerManager (Public Infrastructure)
 
-LedgerManager 是所有服务版本共享的公共基础设施，升级后需要同步到所有版本分支。
+LedgerManager is public infrastructure shared by all service versions. After upgrading, it needs to be synchronized to all version tags.
 
 ```bash
-# 在 main 分支修改 LedgerManager 合约代码
+# Modify LedgerManager contract code in main branch
 git checkout main
 
-# 验证升级兼容性
+# Validate upgrade compatibility
 npx hardhat upgrade:validate --old LedgerManager --new LedgerManager --network zgTestnetV4
 
-# 执行升级
+# Execute upgrade
 npx hardhat upgrade --name LedgerManager --artifact LedgerManager --execute true --network zgTestnetV4
 
-# 提交升级到 main 分支
+# Commit upgrade to main branch
 git add deployments/zgTestnetV4/LedgerManager*.json .openzeppelin/
 git commit -m "Upgrade LedgerManager"
 
-# 将 LedgerManager 升级同步到所有版本 tag
-# 需要对每个版本 tag 执行以下步骤：
+# Synchronize LedgerManager upgrade to all version tags
+# Execute the following steps for each version tag:
 
-# 步骤1：切换到版本 tag（如 inference-v1.0）
+# Step 1: Switch to version tag (e.g., inference-v1.0)
 git checkout inference-v1.0
 
-# 步骤2：从 main 分支同步 LedgerManager 代码和文件
+# Step 2: Sync LedgerManager code and files from main branch
 git checkout main -- contracts/ledger/
 git checkout main -- deployments/zgTestnetV4/LedgerManager*.json
 
-# 步骤3：重新导入合约（使用更新后的 LedgerManager）
+# Step 3: Re-import contracts (using updated LedgerManager)
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 
-# 步骤4：提交更新
+# Step 4: Commit updates
 git add deployments/ .openzeppelin/
 git commit -m "Update LedgerManager after upgrade"
 
-# 重复以上步骤为其他版本 tag：inference-v2.0, fine-tuning-v1.0 等
+# Repeat the above steps for other version tags: inference-v2.0, fine-tuning-v1.0, etc.
 
-# 返回 main 分支
+# Return to main branch
 git checkout main
 ```
 
-**说明**：LedgerManager 作为公共基础设施，其升级会影响所有服务版本。因此需要：
+**Explanation**: LedgerManager as public infrastructure affects all service versions. Therefore, it requires:
 
-1. 在 main 分支执行升级
-2. 将升级后的代码和 deployment 文件同步到所有版本 tag
-3. 每个版本重新执行 `forceImportAll` 以更新 `.openzeppelin/` 信息
-4. 这样确保所有版本都使用最新的 LedgerManager
+1. Execute upgrade in main branch
+2. Synchronize upgraded code and deployment files to all version tags
+3. Each version re-executes `forceImportAll` to update `.openzeppelin/` information
+4. This ensures all versions use the latest LedgerManager
 
-**重要原则**：对于 LedgerManager 等公共基础设施的修改，必须考虑以下几点：
+**Important Principles**: For modifications to public infrastructure like LedgerManager, consider the following:
 
-- **兼容性评估**：修改前需要评估对所有现有服务版本的兼容性影响
-- **全量同步**：如果修改影响所有版本，需要像 LedgerManager 一样将所有版本 tag 更新到最新修改
-- **版本策略**：如果修改不兼容现有版本，考虑创建新的公共组件版本，而不是直接修改现有组件
-- **测试覆盖**：修改后需要测试所有依赖该组件的服务版本，确保功能正常
+- **Compatibility Assessment**: Evaluate compatibility impact on all existing service versions before modification
+- **Full Synchronization**: If modifications affect all versions, update all version tags to the latest modification like LedgerManager
+- **Versioning Strategy**: If modifications are incompatible with existing versions, consider creating new public component versions instead of directly modifying existing components
+- **Test Coverage**: After modification, test all service versions that depend on the component to ensure functionality is normal
