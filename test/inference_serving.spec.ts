@@ -11,9 +11,9 @@ import {
     AccountStructOutput,
     ServiceStructOutput,
     TEESettlementDataStruct,
-} from "../typechain-types/contracts/inference/InferenceServing.sol/InferenceServing";
+} from "../typechain-types/contracts/inference/InferenceServing";
 // Mock public key for testing - just a placeholder as ZK is no longer used
-const publicKey: [bigint, bigint] = [BigInt(1), BigInt(2)];
+// const publicKey: [bigint, bigint] = [BigInt(1), BigInt(2)];
 
 describe("Inference Serving", () => {
     let serving: Serving;
@@ -50,8 +50,8 @@ describe("Inference Serving", () => {
     const additionalData = "U2FsdGVkX18cuPVgRkw/sHPq2YzJE5MyczGO0vOTQBBiS9A4Pka5woWK82fZr0Xjh8mDhjlW9ARsX6e6sKDChg==";
 
     beforeEach(async () => {
-        await deployments.fixture(["compute-network"]);
-        servingDeployment = await deployments.get("InferenceServing");
+        await deployments.fixture(["test-services"]);
+        servingDeployment = await deployments.get("InferenceServing_test");
         LedgerManagerDeployment = await deployments.get("LedgerManager");
         serving = await ethers.getContractAt("InferenceServing", servingDeployment.address);
         ledger = await ethers.getContractAt("LedgerManager", LedgerManagerDeployment.address);
@@ -67,17 +67,17 @@ describe("Inference Serving", () => {
 
     beforeEach(async () => {
         await Promise.all([
-            ledger.addLedger(publicKey, additionalData, {
+            ledger.addLedger(additionalData, {
                 value: ownerInitialLedgerBalance,
             }),
-            ledger.connect(user1).addLedger(publicKey, additionalData, {
+            ledger.connect(user1).addLedger(additionalData, {
                 value: user1InitialLedgerBalance,
             }),
         ]);
 
         await Promise.all([
-            ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance),
-            ledger.connect(user1).transferFund(provider1Address, "inference", user1InitialInferenceBalance),
+            ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance),
+            ledger.connect(user1).transferFund(provider1Address, "inference-test", user1InitialInferenceBalance),
 
             serving.connect(provider1).addOrUpdateService({
                 serviceType: provider1ServiceType,
@@ -120,7 +120,7 @@ describe("Inference Serving", () => {
 
         it("should transfer fund and update balance", async () => {
             const transferAmount = (ownerInitialLedgerBalance - ownerInitialInferenceBalance) / 3;
-            await ledger.transferFund(provider1Address, "inference", transferAmount);
+            await ledger.transferFund(provider1Address, "inference-test", transferAmount);
 
             const account = await serving.getAccount(ownerAddress, provider1);
             expect(account.balance).to.equal(BigInt(ownerInitialInferenceBalance + transferAmount));
@@ -142,7 +142,7 @@ describe("Inference Serving", () => {
 
         it("should get accounts by provider", async () => {
             // Add another provider for testing
-            await ledger.transferFund(provider2Address, "inference", ownerInitialInferenceBalance);
+            await ledger.transferFund(provider2Address, "inference-test", ownerInitialInferenceBalance);
 
             const [accounts1, total1] = await serving.getAccountsByProvider(provider1Address, 0, 0);
             const [accounts2, total2] = await serving.getAccountsByProvider(provider2Address, 0, 0);
@@ -174,7 +174,7 @@ describe("Inference Serving", () => {
 
         it("should get accounts by user", async () => {
             // Add another provider for testing
-            await ledger.transferFund(provider2Address, "inference", ownerInitialInferenceBalance);
+            await ledger.transferFund(provider2Address, "inference-test", ownerInitialInferenceBalance);
 
             const [ownerAccounts, ownerTotal] = await serving.getAccountsByUser(ownerAddress, 0, 0);
             const [user1Accounts, user1Total] = await serving.getAccountsByUser(user1Address, 0, 0);
@@ -222,7 +222,7 @@ describe("Inference Serving", () => {
         let unlockTime: number;
 
         beforeEach(async () => {
-            const res = await ledger.retrieveFund([provider1Address], "inference");
+            const res = await ledger.retrieveFund([provider1Address], "inference-test");
             const receipt = await res.wait();
 
             const block = await ethers.provider.getBlock((receipt as TransactionReceipt).blockNumber);
@@ -232,7 +232,7 @@ describe("Inference Serving", () => {
         it("should succeeded if the unlockTime has arrived and called", async () => {
             await time.increaseTo(unlockTime);
 
-            await ledger.retrieveFund([provider1Address], "inference");
+            await ledger.retrieveFund([provider1Address], "inference-test");
             const account = await serving.getAccount(ownerAddress, provider1);
             expect(account.balance).to.be.equal(BigInt(0));
         });
@@ -245,13 +245,13 @@ describe("Inference Serving", () => {
         beforeEach(async () => {
             // Setup: Transfer funds to ensure we have a clean test account
             // After setup: balance=1000 (500 from previous + 500 new), pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.connect(user1).transferFund(provider1Address, "inference", 500);
+            await ledger.connect(user1).transferFund(provider1Address, "inference-test", 500);
         });
 
         it("should reuse array positions after refund processing", async () => {
             // Step 1: Create first refund
             // Before: balance=1000, pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
             // After: balance=1000, pendingRefund=1000, refunds=[{amount:1000, processed:false}], validRefundsLength=1
 
             let account = await serving.getAccount(user1Address, provider1);
@@ -263,7 +263,7 @@ describe("Inference Serving", () => {
             // Step 2: Process refund after lock time
             // Before: refunds=[{amount:1000, processed:false}], validRefundsLength=1
             await time.increase(lockTime + 1);
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
             // After: balance=0, pendingRefund=0, refunds=[{amount:1000, processed:true}], validRefundsLength=0 (dirty data in position 0)
 
             account = await serving.getAccount(user1Address, provider1);
@@ -273,13 +273,13 @@ describe("Inference Serving", () => {
             // Step 3: Transfer more funds and create new refund - should reuse position 0
             // Before: balance=0, refunds=[dirty_data], validRefundsLength=0
             const newTransferAmount = 300;
-            await ledger.connect(user1).transferFund(provider1Address, "inference", newTransferAmount);
+            await ledger.connect(user1).transferFund(provider1Address, "inference-test", newTransferAmount);
             // After transfer: balance=300, refunds=[dirty_data], validRefundsLength=0
             account = await serving.getAccount(user1Address, provider1);
             expect(Number(account.balance)).to.equal(300);
             expect(Number(account.pendingRefund)).to.equal(0);
 
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
             // After new refund: balance=300, pendingRefund=300, refunds=[{amount:300, processed:false}], validRefundsLength=1
             // Key optimization: Position 0 is REUSED, avoiding array.push() and saving ~15,000 gas
 
@@ -292,7 +292,7 @@ describe("Inference Serving", () => {
 
         it("should handle refund cancellation through transfer operations", async () => {
             // Step 1: Create initial refund
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
             // After: balance=1000, pendingRefund=1000, refunds=[{amount:1000, processed:false}], validRefundsLength=1
 
             let account = await serving.getAccount(user1Address, provider1);
@@ -303,7 +303,7 @@ describe("Inference Serving", () => {
 
             // Step 2: Transfer more funds - should automatically cancel some pending refunds
             const newTransferAmount = 300;
-            await ledger.connect(user1).transferFund(provider1Address, "inference", newTransferAmount);
+            await ledger.connect(user1).transferFund(provider1Address, "inference-test", newTransferAmount);
 
             account = await serving.getAccount(user1Address, provider1);
             expect(Number(account.balance)).to.equal(1000);
@@ -315,7 +315,7 @@ describe("Inference Serving", () => {
             // Strategy: Create multiple refunds through partial cancellation, then process them
 
             // Step 1: Create a large refund
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
 
             let account = await serving.getAccount(user1Address, provider1);
             expect(account.refunds.length).to.equal(1);
@@ -323,11 +323,11 @@ describe("Inference Serving", () => {
             // After: refunds=[{amount:1000, processed:false}], validRefundsLength=1
 
             // Step 2: Use partial cancellation to split the refund into smaller pieces
-            await ledger.connect(user1).transferFund(provider1Address, "inference", 10);
+            await ledger.connect(user1).transferFund(provider1Address, "inference-test", 10);
             // After: refunds=[{amount:990, processed:false}], validRefundsLength=1
 
             // Now request another refund for the new balance
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
             // After: refunds=[{amount:990, processed:false}, {amount:10, processed:false}], validRefundsLength=2
 
             account = await serving.getAccount(user1Address, provider1);
@@ -342,8 +342,8 @@ describe("Inference Serving", () => {
 
             while (account.refunds.length < MAX_REFUNDS_PER_ACCOUNT) {
                 // Small transfer and refund to potentially create new entries
-                await ledger.connect(user1).transferFund(provider1Address, "inference", 10);
-                await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+                await ledger.connect(user1).transferFund(provider1Address, "inference-test", 10);
+                await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
 
                 account = await serving.getAccount(user1Address, provider1);
 
@@ -352,8 +352,8 @@ describe("Inference Serving", () => {
                     expect(account.refunds.length).to.equal(MAX_REFUNDS_PER_ACCOUNT);
 
                     // Now try to add one more refund - this should fail with TooManyRefunds error
-                    await ledger.connect(user1).transferFund(provider1Address, "inference", 10);
-                    await expect(ledger.connect(user1).retrieveFund([provider1Address], "inference"))
+                    await ledger.connect(user1).transferFund(provider1Address, "inference-test", 10);
+                    await expect(ledger.connect(user1).retrieveFund([provider1Address], "inference-test"))
                         .to.be.revertedWithCustomError(serving, "TooManyRefunds")
                         .withArgs(user1Address, provider1Address);
 
@@ -363,7 +363,7 @@ describe("Inference Serving", () => {
 
             // Step 4: Process all refunds to create dirty data
             await time.increase(lockTime + 1);
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
 
             account = await serving.getAccount(user1Address, provider1);
 
@@ -884,6 +884,25 @@ describe("Inference Serving", () => {
 
     describe("deleteAccount", () => {
         it("should delete account", async () => {
+            // Need to retrieve funds first before deleting
+            await ledger.retrieveFund([provider1Address], "inference-test");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
+            
+            // Wait for unlock time
+            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_mine", []);
+            
+            // Process refunds
+            await ledger.retrieveFund([provider1Address], "inference-test");
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
+            
+            // Refund remaining balance from ledger
+            const ownerLedger = await ledger.getLedger(ownerAddress);
+            if (ownerLedger.totalBalance > 0) {
+                await ledger.refund(ownerLedger.totalBalance);
+            }
+            
+            // Now can delete
             await expect(ledger.deleteLedger()).not.to.be.reverted;
             const [accounts] = await serving.getAllAccounts(0, 0);
             expect(accounts.length).to.equal(1);

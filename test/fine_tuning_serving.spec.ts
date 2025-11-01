@@ -7,13 +7,13 @@ import { Deployment } from "hardhat-deploy/types";
 import { beforeEach } from "mocha";
 import { FineTuningServing as Serving, LedgerManager } from "../typechain-types";
 import {
-    AccountStructOutput,
+    AccountSummaryStructOutput,
     QuotaStruct,
     ServiceStructOutput,
     VerifierInputStruct,
 } from "../typechain-types/contracts/fine-tuning/FineTuningServing.sol/FineTuningServing";
 // Mock public key for testing - just a placeholder as ZK is no longer used
-const publicKey: [bigint, bigint] = [BigInt(1), BigInt(2)];
+// const publicKey: [bigint, bigint] = [BigInt(1), BigInt(2)];
 
 describe("Fine tuning serving", () => {
     let serving: Serving;
@@ -62,8 +62,8 @@ describe("Fine tuning serving", () => {
     const additionalData = "";
 
     beforeEach(async () => {
-        await deployments.fixture(["compute-network"]);
-        servingDeployment = await deployments.get("FineTuningServing");
+        await deployments.fixture(["test-services"]);
+        servingDeployment = await deployments.get("FineTuningServing_test");
         LedgerManagerDeployment = await deployments.get("LedgerManager");
         serving = await ethers.getContractAt("FineTuningServing", servingDeployment.address);
         ledger = await ethers.getContractAt("LedgerManager", LedgerManagerDeployment.address);
@@ -79,17 +79,17 @@ describe("Fine tuning serving", () => {
 
     beforeEach(async () => {
         await Promise.all([
-            ledger.addLedger(publicKey, additionalData, {
+            ledger.addLedger(additionalData, {
                 value: ownerInitialLedgerBalance,
             }),
-            ledger.connect(user1).addLedger(publicKey, additionalData, {
+            ledger.connect(user1).addLedger(additionalData, {
                 value: user1InitialLedgerBalance,
             }),
         ]);
 
         await Promise.all([
-            ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance),
-            ledger.connect(user1).transferFund(provider1Address, "fine-tuning", user1InitialFineTuningBalance),
+            ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance),
+            ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", user1InitialFineTuningBalance),
 
             serving
                 .connect(provider1)
@@ -135,7 +135,7 @@ describe("Fine tuning serving", () => {
 
         it("should transfer fund and update balance", async () => {
             const transferAmount = (ownerInitialLedgerBalance - ownerInitialFineTuningBalance) / 3;
-            await ledger.transferFund(provider1Address, "fine-tuning", transferAmount);
+            await ledger.transferFund(provider1Address, "fine-tuning-test", transferAmount);
 
             const account = await serving.getAccount(ownerAddress, provider1);
             expect(account.balance).to.equal(BigInt(ownerInitialFineTuningBalance + transferAmount));
@@ -143,9 +143,9 @@ describe("Fine tuning serving", () => {
 
         it("should get all users", async () => {
             const [accounts] = await serving.getAllAccounts(0, 0);
-            const userAddresses = (accounts as AccountStructOutput[]).map((a) => a.user);
-            const providerAddresses = (accounts as AccountStructOutput[]).map((a) => a.provider);
-            const balances = (accounts as AccountStructOutput[]).map((a) => a.balance);
+            const userAddresses = (accounts as AccountSummaryStructOutput[]).map((a) => a.user);
+            const providerAddresses = (accounts as AccountSummaryStructOutput[]).map((a) => a.provider);
+            const balances = (accounts as AccountSummaryStructOutput[]).map((a) => a.balance);
 
             expect(userAddresses).to.have.members([ownerAddress, user1Address]);
             expect(providerAddresses).to.have.members([provider1Address, provider1Address]);
@@ -184,7 +184,7 @@ describe("Fine tuning serving", () => {
 
         it("should get accounts by provider", async () => {
             // Add another provider for testing
-            await ledger.transferFund(provider2Address, "fine-tuning", ownerInitialFineTuningBalance);
+            await ledger.transferFund(provider2Address, "fine-tuning-test", ownerInitialFineTuningBalance);
 
             const [accounts1, total1] = await serving.getAccountsByProvider(provider1Address, 0, 0);
             const [accounts2, total2] = await serving.getAccountsByProvider(provider2Address, 0, 0);
@@ -216,7 +216,7 @@ describe("Fine tuning serving", () => {
 
         it("should get accounts by user", async () => {
             // Add another provider for testing
-            await ledger.transferFund(provider2Address, "fine-tuning", ownerInitialFineTuningBalance);
+            await ledger.transferFund(provider2Address, "fine-tuning-test", ownerInitialFineTuningBalance);
 
             const [ownerAccounts, ownerTotal] = await serving.getAccountsByUser(ownerAddress, 0, 0);
             const [user1Accounts, user1Total] = await serving.getAccountsByUser(user1Address, 0, 0);
@@ -264,7 +264,7 @@ describe("Fine tuning serving", () => {
         let unlockTime: number;
 
         beforeEach(async () => {
-            const res = await ledger.retrieveFund([provider1Address], "fine-tuning");
+            const res = await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             const receipt = await res.wait();
 
             const block = await ethers.provider.getBlock((receipt as TransactionReceipt).blockNumber);
@@ -274,7 +274,7 @@ describe("Fine tuning serving", () => {
         it("should succeeded if the unlockTime has arrived and called", async () => {
             await time.increaseTo(unlockTime);
 
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             const account = await serving.getAccount(ownerAddress, provider1);
             expect(account.balance).to.be.equal(BigInt(0));
         });
@@ -287,13 +287,13 @@ describe("Fine tuning serving", () => {
         beforeEach(async () => {
             // Setup: Transfer funds to ensure we have a clean test account
             // After setup: balance=1000 (500 from previous + 500 new), pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning", 500);
+            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", 500);
         });
 
         it("should reuse array positions after refund processing", async () => {
             // Step 1: Create first refund
             // Before: balance=1000, pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
             // After: balance=1000, pendingRefund=1000, refunds=[{amount:1000, processed:false}], validRefundsLength=1
 
             let account = await serving.getAccount(user1Address, provider1);
@@ -305,7 +305,7 @@ describe("Fine tuning serving", () => {
             // Step 2: Process refund after lock time
             // Before: refunds=[{amount:1000, processed:false}], validRefundsLength=1
             await time.increase(lockTime + 1);
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
             // After: balance=0, pendingRefund=0, refunds=[{amount:1000, processed:true}], validRefundsLength=0 (dirty data in position 0)
 
             account = await serving.getAccount(user1Address, provider1);
@@ -315,13 +315,13 @@ describe("Fine tuning serving", () => {
             // Step 3: Transfer more funds and create new refund
             // Before: balance=0, refunds=[dirty_data], validRefundsLength=0
             const newTransferAmount = 300;
-            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning", newTransferAmount);
+            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", newTransferAmount);
             // After transfer: balance=300, refunds=[dirty_data], validRefundsLength=0
             account = await serving.getAccount(user1Address, provider1);
             expect(Number(account.balance)).to.equal(300);
             expect(Number(account.pendingRefund)).to.equal(0);
 
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
             // After new refund: balance=300, pendingRefund=300, refunds=[{amount:300, processed:false}], validRefundsLength=1
             // Key optimization: Position 0 is REUSED, avoiding array.push() and saving ~15,000 gas
 
@@ -335,7 +335,7 @@ describe("Fine tuning serving", () => {
         it("should handle refund cancellation through transfer operations", async () => {
             // Step 1: Create initial refund
             // Before: balance=1000, pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
             // After: balance=1000, pendingRefund=1000, refunds=[{amount:1000, processed:false}], validRefundsLength=1
 
             let account = await serving.getAccount(user1Address, provider1);
@@ -347,7 +347,7 @@ describe("Fine tuning serving", () => {
             // Step 2: Transfer more funds - should automatically cancel some pending refunds
             // Before: balance=1000, pendingRefund=1000, refunds=[{amount:1000, processed:false}]
             const newTransferAmount = 300;
-            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning", newTransferAmount);
+            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", newTransferAmount);
             // During transfer: cancelRetrievingAmount = min(300, 1000) = 300
             // - Refund is partially cancelled: refund amount reduces by 300
             // - PendingRefund becomes 1000-300=700
@@ -364,7 +364,7 @@ describe("Fine tuning serving", () => {
             // Strategy: Create multiple refunds through partial cancellation, then process them
 
             // Step 1: Create a large refund
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
 
             let account = await serving.getAccount(user1Address, provider1);
             expect(account.refunds.length).to.equal(1);
@@ -372,11 +372,11 @@ describe("Fine tuning serving", () => {
             // After: refunds=[{amount:1000, processed:false}], validRefundsLength=1
 
             // Step 2: Use partial cancellation to split the refund into smaller pieces
-            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning", 10);
+            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", 10);
             // After: refunds=[{amount:990, processed:false}], validRefundsLength=1
 
             // Now request another refund for the new balance
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
             // After: refunds=[{amount:990, processed:false}, {amount:10, processed:false}], validRefundsLength=2
 
             account = await serving.getAccount(user1Address, provider1);
@@ -391,8 +391,8 @@ describe("Fine tuning serving", () => {
 
             while (account.refunds.length < MAX_REFUNDS_PER_ACCOUNT) {
                 // Small transfer and refund to potentially create new entries
-                await ledger.connect(user1).transferFund(provider1Address, "fine-tuning", 10);
-                await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+                await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", 10);
+                await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
 
                 account = await serving.getAccount(user1Address, provider1);
 
@@ -401,8 +401,8 @@ describe("Fine tuning serving", () => {
                     expect(account.refunds.length).to.equal(MAX_REFUNDS_PER_ACCOUNT);
 
                     // Now try to add one more refund - this should fail with TooManyRefunds error
-                    await ledger.connect(user1).transferFund(provider1Address, "fine-tuning", 10);
-                    await expect(ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning"))
+                    await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", 10);
+                    await expect(ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test"))
                         .to.be.revertedWithCustomError(serving, "TooManyRefunds")
                         .withArgs(user1Address, provider1Address);
 
@@ -412,7 +412,7 @@ describe("Fine tuning serving", () => {
 
             // Step 4: Process all refunds to create dirty data
             await time.increase(lockTime + 1);
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
 
             account = await serving.getAccount(user1Address, provider1);
 
@@ -550,9 +550,11 @@ describe("Fine tuning serving", () => {
 
             const tx = await serving.connect(provider1).settleFees(verifierInput);
             const receipt = await tx.wait();
-            console.log(`Actual gas used for settleFees: ${receipt.gasUsed.toString()}`);
+            console.log(`Actual gas used for settleFees: ${receipt?.gasUsed.toString()}`);
             console.log(`Gas price: ${tx.gasPrice?.toString() || "N/A"} wei`);
-            console.log(`Transaction cost: ${(receipt.gasUsed * (tx.gasPrice || BigInt(0))).toString()} wei`);
+            const gasUsed = receipt?.gasUsed || BigInt(0);
+            const gasPrice = tx.gasPrice || BigInt(0);
+            console.log(`Transaction cost: ${(gasUsed * gasPrice).toString()} wei`);
 
             await expect(tx)
                 .to.emit(serving, "BalanceUpdated")
@@ -712,6 +714,25 @@ describe("Fine tuning serving", () => {
 
     describe("deleteAccount", () => {
         it("should delete account", async () => {
+            // Need to retrieve funds first before deleting
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
+            
+            // Wait for unlock time
+            await ethers.provider.send("evm_increaseTime", [86401]);
+            await ethers.provider.send("evm_mine", []);
+            
+            // Process refunds
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
+            
+            // Refund remaining balance from ledger
+            const ownerLedger = await ledger.getLedger(ownerAddress);
+            if (ownerLedger.totalBalance > 0) {
+                await ledger.refund(ownerLedger.totalBalance);
+            }
+            
+            // Now can delete
             await expect(ledger.deleteLedger()).not.to.be.reverted;
             const [accounts] = await serving.getAllAccounts(0, 0);
             expect(accounts.length).to.equal(1);

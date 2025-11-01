@@ -8,7 +8,6 @@ import { beforeEach } from "mocha";
 import { FineTuningServing, InferenceServing, LedgerManager } from "../typechain-types";
 import { LedgerStructOutput } from "../typechain-types/contracts/ledger/LedgerManager.sol/LedgerManager";
 // Mock public key for testing - just a placeholder as ZK is no longer used
-const publicKey: [bigint, bigint] = [BigInt(1), BigInt(2)];
 
 describe("Ledger manager", () => {
     let inferenceServing: InferenceServing;
@@ -35,9 +34,9 @@ describe("Ledger manager", () => {
     const additionalData = "";
 
     beforeEach(async () => {
-        await deployments.fixture(["compute-network"]);
-        inferenceServingDeployment = await deployments.get("InferenceServing");
-        fineTuningServingDeployment = await deployments.get("FineTuningServing");
+        await deployments.fixture(["test-services"]);
+        inferenceServingDeployment = await deployments.get("InferenceServing_test");
+        fineTuningServingDeployment = await deployments.get("FineTuningServing_test");
         LedgerManagerDeployment = await deployments.get("LedgerManager");
 
         inferenceServing = await ethers.getContractAt("InferenceServing", inferenceServingDeployment.address);
@@ -54,10 +53,10 @@ describe("Ledger manager", () => {
 
     beforeEach(async () => {
         await Promise.all([
-            ledger.addLedger(publicKey, additionalData, {
+            ledger.addLedger(additionalData, {
                 value: ownerInitialLedgerBalance,
             }),
-            ledger.connect(user1).addLedger(publicKey, additionalData, {
+            ledger.connect(user1).addLedger(additionalData, {
                 value: user1InitialLedgerBalance,
             }),
         ]);
@@ -91,25 +90,20 @@ describe("Ledger manager", () => {
     describe("Transfer fund", () => {
         it("should transfer fund to serving contract", async () => {
             await Promise.all([
-                ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance),
-                ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance),
-                ledger.connect(user1).transferFund(provider1Address, "fine-tuning", user1InitialFineTuningBalance),
-                ledger.connect(user1).transferFund(provider1Address, "inference", user1InitialInferenceBalance),
+                ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance),
+                ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance),
+                ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", user1InitialFineTuningBalance),
+                ledger.connect(user1).transferFund(provider1Address, "inference-test", user1InitialInferenceBalance),
             ]);
 
-            const [ledgers, total] = await ledger.getAllLedgers(0, 0);
+            const [ledgers] = await ledger.getAllLedgers(0, 0);
             const userAddresses = (ledgers as LedgerStructOutput[]).map((a) => a.user);
             const availableBalances = (ledgers as LedgerStructOutput[]).map((a) => a.availableBalance);
-            const inferenceProviders = (ledgers as LedgerStructOutput[]).map((a) => a.inferenceProviders);
-            const fineTuningProviders = (ledgers as LedgerStructOutput[]).map((a) => a.fineTuningProviders);
-
             expect(userAddresses).to.have.members([ownerAddress, user1Address]);
             expect(availableBalances).to.have.members([
                 BigInt(ownerInitialLedgerBalance - ownerInitialFineTuningBalance - ownerInitialInferenceBalance),
                 BigInt(user1InitialLedgerBalance - user1InitialFineTuningBalance - user1InitialInferenceBalance),
             ]);
-            expect(inferenceProviders).to.have.deep.members([[provider1Address], [provider1Address]]);
-            expect(fineTuningProviders).to.have.deep.members([[provider1Address], [provider1Address]]);
 
             const inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
             const fineTuningAccount = await fineTuningServing.getAccount(ownerAddress, provider1);
@@ -119,12 +113,12 @@ describe("Ledger manager", () => {
 
         it("should cancel the retrieved fund and transfer the remain fund when transfer fund larger than total retrieved fund", async () => {
             await Promise.all([
-                ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance / 2),
-                ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance / 2),
+                ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance / 2),
+                ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance / 2),
             ]);
 
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
-            await ledger.retrieveFund([provider1Address], "inference");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+            await ledger.retrieveFund([provider1Address], "inference-test");
 
             let inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
             let fineTuningAccount = await fineTuningServing.getAccount(ownerAddress, provider1);
@@ -134,8 +128,8 @@ describe("Ledger manager", () => {
             expect(fineTuningAccount.pendingRefund).to.equal(BigInt(ownerInitialFineTuningBalance / 2));
 
             await Promise.all([
-                ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance),
-                ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance),
+                ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance),
+                ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance),
             ]);
 
             inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
@@ -148,12 +142,12 @@ describe("Ledger manager", () => {
 
         it("should cancel the retrieved fund even when transfer fund smaller than total retrieved fund", async () => {
             await Promise.all([
-                ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance),
-                ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance),
+                ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance),
+                ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance),
             ]);
 
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
-            await ledger.retrieveFund([provider1Address], "inference");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+            await ledger.retrieveFund([provider1Address], "inference-test");
 
             let inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
             let fineTuningAccount = await fineTuningServing.getAccount(ownerAddress, provider1);
@@ -164,8 +158,8 @@ describe("Ledger manager", () => {
 
             // The transfer fund is smaller than the total retrieved fund, so only part of the pending refund should be canceled
             await Promise.all([
-                ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance / 2),
-                ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance / 2),
+                ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance / 2),
+                ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance / 2),
             ]);
 
             inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
@@ -179,9 +173,9 @@ describe("Ledger manager", () => {
         it("should handle array optimization during multiple transfer operations", async () => {
             // Step 1: Setup initial account and create refund
             // Before: balance=0, pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.transferFund(provider1Address, "fine-tuning", 800);
+            await ledger.transferFund(provider1Address, "fine-tuning-test", 800);
             // After transfer: balance=800, pendingRefund=0, refunds=[], validRefundsLength=0
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             // After refund request: balance=800, pendingRefund=800, refunds=[{amount:800, processed:false}], validRefundsLength=1
 
             let account = await fineTuningServing.getAccount(ownerAddress, provider1);
@@ -190,7 +184,7 @@ describe("Ledger manager", () => {
 
             // Step 2: Transfer with full cancellation
             // Before: balance=800, pendingRefund=800, refunds=[{amount:800, processed:false}]
-            await ledger.transferFund(provider1Address, "fine-tuning", 1000);
+            await ledger.transferFund(provider1Address, "fine-tuning-test", 1000);
             // During transfer: cancelRetrievingAmount = min(1000, 800) = 800 (full cancellation)
             // - Entire refund is cancelled: refund marked as processed
             // - PendingRefund becomes 800-800=0
@@ -202,7 +196,7 @@ describe("Ledger manager", () => {
 
             // Step 3: Create new refund - should reuse array position
             // Before: balance=1000, pendingRefund=0, refunds=[dirty_data], validRefundsLength=0
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             // After: balance=1000, pendingRefund=1000, refunds=[{amount:1000, processed:false}], validRefundsLength=1
             // Key optimization: Same array position is REUSED (index 0), no array expansion
 
@@ -213,12 +207,11 @@ describe("Ledger manager", () => {
     });
 
     it("should refund fund", async () => {
-        await ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance);
+        await ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance);
 
         let account = await ledger.getLedger(ownerAddress);
         expect(account.totalBalance).to.equal(BigInt(ownerInitialLedgerBalance));
         expect(account.availableBalance).to.equal(BigInt(ownerInitialLedgerBalance - ownerInitialFineTuningBalance));
-        expect(account.fineTuningProviders[0]).equal(provider1Address);
 
         await expect(ledger.refund(ownerInitialLedgerBalance)).to.be.reverted;
         await expect(ledger.refund(ownerInitialLedgerBalance - ownerInitialFineTuningBalance)).not.to.be.reverted;
@@ -231,9 +224,9 @@ describe("Ledger manager", () => {
         let unlockTime: number;
 
         beforeEach(async () => {
-            await Promise.all([ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance)]);
+            await Promise.all([ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance)]);
 
-            const res = await ledger.retrieveFund([provider1Address], "fine-tuning");
+            const res = await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             const receipt = await res.wait();
 
             const block = await ethers.provider.getBlock((receipt as TransactionReceipt).blockNumber);
@@ -243,7 +236,7 @@ describe("Ledger manager", () => {
         it("should not receive fund if the unlockTime hasn't arrived and called ", async () => {
             await time.increaseTo(unlockTime - 1);
 
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             const fineTuningAccount = await fineTuningServing.getAccount(ownerAddress, provider1);
             const ledgerAccount = await ledger.getLedger(ownerAddress);
 
@@ -256,7 +249,7 @@ describe("Ledger manager", () => {
         it("should receive fund if the unlockTime has arrived and called", async () => {
             await time.increaseTo(unlockTime + 1);
 
-            await ledger.retrieveFund([provider1Address], "fine-tuning");
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             const fineTuningAccount = await fineTuningServing.getAccount(ownerAddress, provider1);
             const ledgerAccount = await ledger.getLedger(ownerAddress);
 
@@ -269,9 +262,9 @@ describe("Ledger manager", () => {
         let unlockTime: number;
 
         beforeEach(async () => {
-            await Promise.all([ledger.transferFund(provider1Address, "inference", ownerInitialInferenceBalance)]);
+            await Promise.all([ledger.transferFund(provider1Address, "inference-test", ownerInitialInferenceBalance)]);
 
-            const res = await ledger.retrieveFund([provider1Address], "inference");
+            const res = await ledger.retrieveFund([provider1Address], "inference-test");
             const receipt = await res.wait();
 
             const block = await ethers.provider.getBlock((receipt as TransactionReceipt).blockNumber);
@@ -281,7 +274,7 @@ describe("Ledger manager", () => {
         it("should not receive fund if the unlockTime hasn't arrived and called ", async () => {
             await time.increaseTo(unlockTime - 1);
 
-            await ledger.retrieveFund([provider1Address], "inference");
+            await ledger.retrieveFund([provider1Address], "inference-test");
             const inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
             const ledgerAccount = await ledger.getLedger(ownerAddress);
 
@@ -294,7 +287,7 @@ describe("Ledger manager", () => {
         it("should receive fund if the unlockTime has arrived and called", async () => {
             await time.increaseTo(unlockTime + 1);
 
-            await ledger.retrieveFund([provider1Address], "inference");
+            await ledger.retrieveFund([provider1Address], "inference-test");
             const inferenceAccount = await inferenceServing.getAccount(ownerAddress, provider1);
             const ledgerAccount = await ledger.getLedger(ownerAddress);
 
@@ -305,15 +298,239 @@ describe("Ledger manager", () => {
 
     it("should delete account", async () => {
         await Promise.all([
-            ledger.transferFund(provider1Address, "fine-tuning", ownerInitialFineTuningBalance),
-            ledger.connect(user1).transferFund(provider1Address, "fine-tuning", user1InitialFineTuningBalance),
+            ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance),
+            ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", user1InitialFineTuningBalance),
         ]);
 
         let [accounts] = await fineTuningServing.getAllAccounts(0, 0);
         expect(accounts.length).to.equal(2);
 
+        // Need to retrieve funds first before deleting
+        await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+        await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
+        
+        // Wait for unlock time
+        await ethers.provider.send("evm_increaseTime", [86401]);
+        await ethers.provider.send("evm_mine", []);
+        
+        // Process refunds
+        await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+        await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
+        
+        // Refund remaining balance from ledger
+        const ownerLedger = await ledger.getLedger(ownerAddress);
+        if (ownerLedger.totalBalance > 0) {
+            await ledger.refund(ownerLedger.totalBalance);
+        }
+        
+        // Now can delete
         await expect(ledger.deleteLedger()).not.to.be.reverted;
         [accounts] = await fineTuningServing.getAllAccounts(0, 0);
         expect(accounts.length).to.equal(1);
+    });
+
+    describe("Service Registry Management", () => {
+        it("should register a new service", async () => {
+            // Deploy a new test contract to register
+            const TestContract = await ethers.getContractFactory("InferenceServing");
+            const testService = await TestContract.deploy();
+            await testService.waitForDeployment();
+            const testServiceAddress = await testService.getAddress();
+            
+            // Initialize the test service
+            await testService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            
+            // Register the service
+            await expect(
+                ledger.registerService(
+                    "inference-test",
+                    "v2.0",
+                    testServiceAddress,
+                    "Test Inference Service v2.0"
+                )
+            ).to.emit(ledger, "ServiceRegistered");
+            
+            // Verify service was registered
+            const serviceInfo = await ledger.getServiceInfo(testServiceAddress);
+            expect(serviceInfo.serviceType).to.equal("inference-test");
+            expect(serviceInfo.version).to.equal("v2.0");
+            expect(serviceInfo.description).to.equal("Test Inference Service v2.0");
+            expect(serviceInfo.isRecommended).to.equal(false);
+        });
+
+        it("should get service by name", async () => {
+            // The test deployment already registered inference-test and fine-tuning-test
+            const inferenceAddress = await ledger.getServiceAddressByName("inference-test");
+            expect(inferenceAddress).to.equal(inferenceServingDeployment.address);
+            
+            const fineTuningAddress = await ledger.getServiceAddressByName("fine-tuning-test");
+            expect(fineTuningAddress).to.equal(fineTuningServingDeployment.address);
+        });
+
+        it("should get all active services", async () => {
+            const services = await ledger.getAllActiveServices();
+            
+            // Should have at least the two test services registered
+            expect(services.length).to.be.at.least(2);
+            
+            // Find our test services
+            const inferenceService = services.find(s => s.serviceType === "inference" && s.version === "test");
+            const fineTuningService = services.find(s => s.serviceType === "fine-tuning" && s.version === "test");
+            
+            expect(inferenceService).to.not.be.undefined;
+            expect(fineTuningService).to.not.be.undefined;
+            expect(inferenceService!.isRecommended).to.equal(true);
+            expect(fineTuningService!.isRecommended).to.equal(true);
+        });
+
+        it("should get recommended service", async () => {
+            // Get recommended inference service
+            const [inferenceVersion, inferenceAddress] = await ledger.getRecommendedService("inference");
+            expect(inferenceVersion).to.equal("test");
+            expect(inferenceAddress).to.equal(inferenceServingDeployment.address);
+            
+            // Get recommended fine-tuning service
+            const [fineTuningVersion, fineTuningAddress] = await ledger.getRecommendedService("fine-tuning");
+            expect(fineTuningVersion).to.equal("test");
+            expect(fineTuningAddress).to.equal(fineTuningServingDeployment.address);
+        });
+
+        it("should set and update recommended service", async () => {
+            // Deploy another version
+            const TestContract = await ethers.getContractFactory("InferenceServing");
+            const newService = await TestContract.deploy();
+            await newService.waitForDeployment();
+            const newServiceAddress = await newService.getAddress();
+            
+            // Initialize and register
+            await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            await ledger.registerService(
+                "inference",
+                "v2.0",
+                newServiceAddress,
+                "Inference Service v2.0"
+            );
+            
+            // Set new version as recommended
+            await expect(
+                ledger.setRecommendedService("inference", "v2.0")
+            ).to.emit(ledger, "RecommendedServiceUpdated");
+            
+            // Verify the new version is recommended
+            const [version, address] = await ledger.getRecommendedService("inference");
+            expect(version).to.equal("v2.0");
+            expect(address).to.equal(newServiceAddress);
+            
+            // Verify old version is no longer recommended
+            const isTestRecommended = await ledger.isRecommendedVersion("inference", "test");
+            expect(isTestRecommended).to.equal(false);
+            
+            const isV2Recommended = await ledger.isRecommendedVersion("inference", "v2.0");
+            expect(isV2Recommended).to.equal(true);
+        });
+
+        it("should get all versions of a service type", async () => {
+            // Deploy and register multiple versions
+            const TestContract = await ethers.getContractFactory("InferenceServing");
+            
+            const v1Service = await TestContract.deploy();
+            await v1Service.waitForDeployment();
+            await v1Service.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            await ledger.registerService(
+                "inference",
+                "v1.0",
+                await v1Service.getAddress(),
+                "Inference v1.0"
+            );
+            
+            const v2Service = await TestContract.deploy();
+            await v2Service.waitForDeployment();
+            await v2Service.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            await ledger.registerService(
+                "inference",
+                "v2.0", 
+                await v2Service.getAddress(),
+                "Inference v2.0"
+            );
+            
+            // Get all versions
+            const [versions, addresses, isRecommendedFlags] = await ledger.getAllVersions("inference");
+            
+            // Should have test, v1.0, and v2.0 (possibly more from previous tests)
+            expect(versions.length).to.be.at.least(3);
+            expect(versions).to.include.members(["test", "v1.0", "v2.0"]);
+            
+            // Check that we have corresponding addresses and recommendation flags
+            expect(addresses.length).to.equal(versions.length);
+            expect(isRecommendedFlags.length).to.equal(versions.length);
+            
+            // Find the test version and verify it's recommended
+            const testIndex = versions.indexOf("test");
+            if (testIndex !== -1) {
+                expect(isRecommendedFlags[testIndex]).to.equal(true);
+            }
+        });
+
+        it("should fail to register duplicate service", async () => {
+            await expect(
+                ledger.registerService(
+                    "inference-test",
+                    "test",
+                    inferenceServingDeployment.address,
+                    "Duplicate service"
+                )
+            ).to.be.revertedWith("Service already registered");
+        });
+
+        it("should fail to register service with existing name", async () => {
+            const TestContract = await ethers.getContractFactory("InferenceServing");
+            const newService = await TestContract.deploy();
+            await newService.waitForDeployment();
+            await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            
+            // Try to register with an existing service name (inference-test)
+            await expect(
+                ledger.registerService(
+                    "inference",
+                    "test",
+                    await newService.getAddress(),
+                    "Another inference test"
+                )
+            ).to.be.revertedWith("Service name already exists");
+        });
+
+        it("should fail to set non-existent service as recommended", async () => {
+            await expect(
+                ledger.setRecommendedService("inference-test", "v99.9")
+            ).to.be.revertedWith("Service not found");
+        });
+
+        it("should revert when getting recommended service for non-existent type", async () => {
+            await expect(
+                ledger.getRecommendedService("non-existent-type")
+            ).to.be.revertedWith("No recommended service found for this type");
+        });
+
+        it("should only allow owner to register services", async () => {
+            const TestContract = await ethers.getContractFactory("InferenceServing");
+            const newService = await TestContract.deploy();
+            await newService.waitForDeployment();
+            await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            
+            await expect(
+                ledger.connect(user1).registerService(
+                    "inference-test",
+                    "v3.0",
+                    await newService.getAddress(),
+                    "Unauthorized registration"
+                )
+            ).to.be.reverted;
+        });
+
+        it("should only allow owner to set recommended service", async () => {
+            await expect(
+                ledger.connect(user1).setRecommendedService("inference-test", "test")
+            ).to.be.reverted;
+        });
     });
 });
