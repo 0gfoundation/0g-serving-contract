@@ -11,6 +11,7 @@ struct ServiceParams {
     uint inputPrice;
     uint outputPrice;
     string additionalInfo;
+    address teeSignerAddress;
 }
 
 struct Service {
@@ -23,6 +24,8 @@ struct Service {
     string model;
     string verifiability;
     string additionalInfo;
+    address teeSignerAddress;
+    bool teeSignerAcknowledged;
 }
 
 library ServiceLibrary {
@@ -62,12 +65,25 @@ library ServiceLibrary {
                     block.timestamp,
                     params.model,
                     params.verifiability,
-                    params.additionalInfo
+                    params.additionalInfo,
+                    params.teeSignerAddress,
+                    false  // teeSignerAcknowledged - default to false, needs owner acknowledgement
                 )
             );
             return;
         }
         Service storage value = _get(map, provider);
+        
+        // Check if critical fields are being changed (fields that require re-acknowledgement)
+        bool criticalFieldsChanged = (
+            keccak256(bytes(value.serviceType)) != keccak256(bytes(params.serviceType)) ||
+            keccak256(bytes(value.model)) != keccak256(bytes(params.model)) ||
+            keccak256(bytes(value.verifiability)) != keccak256(bytes(params.verifiability)) ||
+            value.teeSignerAddress != params.teeSignerAddress ||
+            keccak256(bytes(value.additionalInfo)) != keccak256(bytes(params.additionalInfo))
+        );
+        
+        // Update all fields
         value.serviceType = params.serviceType;
         value.inputPrice = params.inputPrice;
         value.outputPrice = params.outputPrice;
@@ -76,6 +92,13 @@ library ServiceLibrary {
         value.model = params.model;
         value.verifiability = params.verifiability;
         value.additionalInfo = params.additionalInfo;
+        value.teeSignerAddress = params.teeSignerAddress;
+        
+        // Reset acknowledgement if critical fields changed
+        // Only price and URL changes don't require re-acknowledgement
+        if (criticalFieldsChanged) {
+            value.teeSignerAcknowledged = false;
+        }
     }
 
     function removeService(ServiceMap storage map, address provider) internal {
@@ -84,6 +107,16 @@ library ServiceLibrary {
             revert ServiceNotExist(provider);
         }
         _remove(map, key);
+    }
+
+    function acknowledgeTEESigner(ServiceMap storage map, address provider) internal {
+        Service storage service = _get(map, provider);
+        service.teeSignerAcknowledged = true;
+    }
+
+    function revokeTEESignerAcknowledgement(ServiceMap storage map, address provider) internal {
+        Service storage service = _get(map, provider);
+        service.teeSignerAcknowledged = false;
     }
 
     function _at(ServiceMap storage map, uint index) internal view returns (Service storage) {
