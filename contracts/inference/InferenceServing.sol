@@ -32,11 +32,34 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     using AccountLibrary for AccountLibrary.AccountMap;
     using ServiceLibrary for ServiceLibrary.ServiceMap;
 
-    uint public lockTime;
-    address public ledgerAddress;
-    ILedger private ledger;
-    AccountLibrary.AccountMap private accountMap;
-    ServiceLibrary.ServiceMap private serviceMap;
+    // @custom:storage-location erc7201:0g.serving.inference.v1.0
+    struct InferenceServingStorage {
+        uint lockTime;
+        address ledgerAddress;
+        ILedger ledger;
+        AccountLibrary.AccountMap accountMap;
+        ServiceLibrary.ServiceMap serviceMap;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("0g.serving.inference.v1.0")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant INFERENCE_SERVING_STORAGE_LOCATION = 0xdfd123095cdedb1cecbc229b30f7cf8745fb3d3951645ac4a8fa4c0895f89500;
+
+    function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
+        assembly {
+            $.slot := INFERENCE_SERVING_STORAGE_LOCATION
+        }
+    }
+
+    // Public getters for compatibility
+    function lockTime() public view returns (uint) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.lockTime;
+    }
+
+    function ledgerAddress() public view returns (address) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.ledgerAddress;
+    }
 
     event BalanceUpdated(address indexed user, address indexed provider, uint amount, uint pendingRefund);
     event RefundRequested(address indexed user, address indexed provider, uint indexed index, uint timestamp);
@@ -57,28 +80,33 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
         _transferOwnership(owner);
-        lockTime = _locktime;
-        ledgerAddress = _ledgerAddress;
-        ledger = ILedger(ledgerAddress);
+        $.lockTime = _locktime;
+        $.ledgerAddress = _ledgerAddress;
+        $.ledger = ILedger(_ledgerAddress);
     }
 
     modifier onlyLedger() {
-        require(msg.sender == ledgerAddress, "Caller is not the ledger contract");
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        require(msg.sender == $.ledgerAddress, "Caller is not the ledger contract");
         _;
     }
 
     function updateLockTime(uint _locktime) public onlyOwner {
-        lockTime = _locktime;
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.lockTime = _locktime;
     }
 
     function getAccount(address user, address provider) public view returns (Account memory) {
-        return accountMap.getAccount(user, provider);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.accountMap.getAccount(user, provider);
     }
 
     function getAllAccounts(uint offset, uint limit) public view returns (Account[] memory accounts, uint total) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return accountMap.getAllAccounts(offset, limit);
+        return $.accountMap.getAllAccounts(offset, limit);
     }
 
     function getAccountsByProvider(
@@ -86,8 +114,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint offset,
         uint limit
     ) public view returns (Account[] memory accounts, uint total) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return accountMap.getAccountsByProvider(provider, offset, limit);
+        return $.accountMap.getAccountsByProvider(provider, offset, limit);
     }
 
     function getAccountsByUser(
@@ -95,28 +124,34 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint offset,
         uint limit
     ) public view returns (Account[] memory accounts, uint total) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return accountMap.getAccountsByUser(user, offset, limit);
+        return $.accountMap.getAccountsByUser(user, offset, limit);
     }
 
     function getBatchAccountsByUsers(address[] calldata users) external view returns (Account[] memory accounts) {
-        return accountMap.getBatchAccountsByUsers(users, msg.sender);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.accountMap.getBatchAccountsByUsers(users, msg.sender);
     }
 
     function acknowledgeProviderSigner(address provider, uint[2] calldata providerPubKey) external {
-        accountMap.acknowledgeProviderSigner(msg.sender, provider, providerPubKey);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.acknowledgeProviderSigner(msg.sender, provider, providerPubKey);
     }
 
     function acknowledgeTEESigner(address provider, address teeSignerAddress) external {
-        accountMap.acknowledgeTEESigner(msg.sender, provider, teeSignerAddress);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.acknowledgeTEESigner(msg.sender, provider, teeSignerAddress);
     }
 
     function accountExists(address user, address provider) public view returns (bool) {
-        return accountMap.accountExists(user, provider);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.accountMap.accountExists(user, provider);
     }
 
     function getPendingRefund(address user, address provider) public view returns (uint) {
-        return accountMap.getPendingRefund(user, provider);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.accountMap.getPendingRefund(user, provider);
     }
 
     function addAccount(
@@ -124,22 +159,26 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         address provider,
         string memory additionalInfo
     ) external payable onlyLedger {
-        (uint balance, uint pendingRefund) = accountMap.addAccount(user, provider, msg.value, additionalInfo);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
     function deleteAccount(address user, address provider) external onlyLedger {
-        accountMap.deleteAccount(user, provider);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.deleteAccount(user, provider);
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
-        (uint balance, uint pendingRefund) = accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        (uint balance, uint pendingRefund) = $.accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
     function requestRefundAll(address user, address provider) external onlyLedger {
-        accountMap.requestRefundAll(user, provider);
-        Account memory account = accountMap.getAccount(user, provider);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.requestRefundAll(user, provider);
+        Account memory account = $.accountMap.getAccount(user, provider);
         if (account.refunds.length > 0) {
             emit RefundRequested(user, provider, account.refunds.length - 1, block.timestamp);
         }
@@ -149,7 +188,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         address user,
         address provider
     ) external onlyLedger returns (uint totalAmount, uint balance, uint pendingRefund) {
-        (totalAmount, balance, pendingRefund) = accountMap.processRefund(user, provider, lockTime);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        (totalAmount, balance, pendingRefund) = $.accountMap.processRefund(user, provider, $.lockTime);
 
         if (totalAmount > 0) {
             payable(msg.sender).transfer(totalAmount);
@@ -158,15 +198,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function getService(address provider) public view returns (Service memory service) {
-        service = serviceMap.getService(provider);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        service = $.serviceMap.getService(provider);
     }
 
     function getAllServices() public view returns (Service[] memory services) {
-        services = serviceMap.getAllServices();
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        services = $.serviceMap.getAllServices();
     }
 
     function addOrUpdateService(ServiceParams calldata params) external {
-        serviceMap.addOrUpdateService(msg.sender, params);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.serviceMap.addOrUpdateService(msg.sender, params);
         emit ServiceUpdated(
             msg.sender,
             params.serviceType,
@@ -180,11 +223,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function removeService() external {
-        serviceMap.removeService(msg.sender);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.serviceMap.removeService(msg.sender);
         emit ServiceRemoved(msg.sender);
     }
 
     function _settleFees(Account storage account, uint amount) private {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
         if (amount > (account.balance - account.pendingRefund)) {
             uint remainingFee = amount - (account.balance - account.pendingRefund);
             account.pendingRefund -= remainingFee;
@@ -207,7 +252,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             }
         }
         account.balance -= amount;
-        ledger.spendFund(account.user, amount);
+        $.ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
     }
 
@@ -318,7 +363,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     // View function to preview settlement without state changes
     function _previewTEESettlement(TEESettlementData calldata settlement) private view returns (SettlementStatus status, uint256 unsettledAmount) {
-        Account storage account = accountMap.getAccount(settlement.user, msg.sender);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
         // Validate TEE signer
         if (account.teeSignerAddress == address(0)) {
@@ -348,7 +394,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function _processTEESettlement(TEESettlementData calldata settlement) private returns (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) {
-        Account storage account = accountMap.getAccount(settlement.user, msg.sender);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
         // Validate TEE signer
         if (account.teeSignerAddress == address(0)) {
