@@ -36,7 +36,7 @@ const config: HardhatUserConfig = {
                 },
             },
             evmVersion: "istanbul",
-            // viaIR: true,
+            viaIR: true,
             optimizer: {
                 enabled: true,
                 runs: 200,

@@ -26,12 +26,40 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     using ServiceLibrary for ServiceLibrary.ServiceMap;
     using VerifierLibrary for VerifierInput;
 
-    uint public lockTime;
-    address public ledgerAddress;
-    ILedger private ledger;
-    AccountLibrary.AccountMap private accountMap;
-    ServiceLibrary.ServiceMap private serviceMap;
-    uint public penaltyPercentage;
+    // @custom:storage-location erc7201:0g.serving.finetuning.v1.0
+    struct FineTuningServingStorage {
+        uint lockTime;
+        address ledgerAddress;
+        ILedger ledger;
+        AccountLibrary.AccountMap accountMap;
+        ServiceLibrary.ServiceMap serviceMap;
+        uint penaltyPercentage;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("0g.serving.finetuning.v1.0")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant FINETUNING_SERVING_STORAGE_LOCATION = 0x5dcaaa00d1d3fae8cd5d66aceca789aec54970049ac35cb62a7adefca50a6800;
+
+    function _getFineTuningServingStorage() private pure returns (FineTuningServingStorage storage $) {
+        assembly {
+            $.slot := FINETUNING_SERVING_STORAGE_LOCATION
+        }
+    }
+
+    // Public getters for compatibility
+    function lockTime() public view returns (uint) {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.lockTime;
+    }
+
+    function ledgerAddress() public view returns (address) {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.ledgerAddress;
+    }
+
+    function penaltyPercentage() public view returns (uint) {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.penaltyPercentage;
+    }
 
     event BalanceUpdated(address indexed user, address indexed provider, uint amount, uint pendingRefund);
     event RefundRequested(address indexed user, address indexed provider, uint indexed index, uint timestamp);
@@ -52,38 +80,44 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         address owner,
         uint _penaltyPercentage
     ) public onlyInitializeOnce {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         _transferOwnership(owner);
-        lockTime = _locktime;
-        ledgerAddress = _ledgerAddress;
-        ledger = ILedger(ledgerAddress);
-        penaltyPercentage = _penaltyPercentage;
+        $.lockTime = _locktime;
+        $.ledgerAddress = _ledgerAddress;
+        $.ledger = ILedger(_ledgerAddress);
+        $.penaltyPercentage = _penaltyPercentage;
     }
 
     modifier onlyLedger() {
-        require(msg.sender == ledgerAddress, "Caller is not the ledger contract");
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        require(msg.sender == $.ledgerAddress, "Caller is not the ledger contract");
         _;
     }
 
     function updateLockTime(uint _locktime) public onlyOwner {
-        lockTime = _locktime;
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.lockTime = _locktime;
     }
 
     function updatePenaltyPercentage(uint _penaltyPercentage) public onlyOwner {
-        penaltyPercentage = _penaltyPercentage;
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.penaltyPercentage = _penaltyPercentage;
     }
 
     // user functions
 
     function getAccount(address user, address provider) public view returns (AccountDetails memory) {
-        return accountMap.getAccountDetails(user, provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.accountMap.getAccountDetails(user, provider);
     }
 
     function getAllAccounts(
         uint offset,
         uint limit
     ) public view returns (AccountSummary[] memory accounts, uint total) {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return accountMap.getAllAccounts(offset, limit);
+        return $.accountMap.getAllAccounts(offset, limit);
     }
 
     function getAccountsByProvider(
@@ -91,8 +125,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint offset,
         uint limit
     ) public view returns (AccountSummary[] memory accounts, uint total) {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return accountMap.getAccountsByProvider(provider, offset, limit);
+        return $.accountMap.getAccountsByProvider(provider, offset, limit);
     }
 
     function getAccountsByUser(
@@ -100,47 +135,56 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint offset,
         uint limit
     ) public view returns (AccountSummary[] memory accounts, uint total) {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return accountMap.getAccountsByUser(user, offset, limit);
+        return $.accountMap.getAccountsByUser(user, offset, limit);
     }
 
     function getBatchAccountsByUsers(
         address[] calldata users
     ) external view returns (AccountSummary[] memory accounts) {
-        return accountMap.getBatchAccountsByUsers(users, msg.sender);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.accountMap.getBatchAccountsByUsers(users, msg.sender);
     }
 
     function accountExists(address user, address provider) public view returns (bool) {
-        return accountMap.accountExists(user, provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.accountMap.accountExists(user, provider);
     }
 
     function getPendingRefund(address user, address provider) public view returns (uint) {
-        return accountMap.getPendingRefund(user, provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.accountMap.getPendingRefund(user, provider);
     }
 
     function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
-        (uint balance, uint pendingRefund) = accountMap.addAccount(user, provider, msg.value, additionalInfo);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
     function deleteAccount(address user, address provider) external onlyLedger {
-        accountMap.deleteAccount(user, provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.accountMap.deleteAccount(user, provider);
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
-        (uint balance, uint pendingRefund) = accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        (uint balance, uint pendingRefund) = $.accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
     function requestRefundAll(address user, address provider) external onlyLedger {
-        accountMap.requestRefundAll(user, provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.accountMap.requestRefundAll(user, provider);
     }
 
     function processRefund(
         address user,
         address provider
     ) external onlyLedger returns (uint totalAmount, uint balance, uint pendingRefund) {
-        (totalAmount, balance, pendingRefund) = accountMap.processRefund(user, provider, lockTime);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        (totalAmount, balance, pendingRefund) = $.accountMap.processRefund(user, provider, $.lockTime);
         if (totalAmount == 0) {
             return (0, balance, pendingRefund);
         }
@@ -149,19 +193,23 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     function getService(address provider) public view returns (Service memory service) {
-        service = serviceMap.getService(provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        service = $.serviceMap.getService(provider);
     }
 
     function getAllServices() public view returns (Service[] memory services) {
-        services = serviceMap.getAllServices();
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        services = $.serviceMap.getAllServices();
     }
 
     function acknowledgeProviderSigner(address provider, address providerSigner) external {
-        accountMap.acknowledgeProviderSigner(msg.sender, provider, providerSigner);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.accountMap.acknowledgeProviderSigner(msg.sender, provider, providerSigner);
     }
 
     function acknowledgeDeliverable(address provider, string calldata id) external {
-        accountMap.acknowledgeDeliverable(msg.sender, provider, id);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.accountMap.acknowledgeDeliverable(msg.sender, provider, id);
     }
 
     // provider functions
@@ -174,17 +222,20 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         bool occupied,
         string[] memory models
     ) external {
-        serviceMap.addOrUpdateService(msg.sender, url, quota, pricePerToken, providerSigner, occupied, models);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.serviceMap.addOrUpdateService(msg.sender, url, quota, pricePerToken, providerSigner, occupied, models);
         emit ServiceUpdated(msg.sender, url, quota, pricePerToken, providerSigner, occupied);
     }
 
     function removeService() external {
-        serviceMap.removeService(msg.sender);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.serviceMap.removeService(msg.sender);
         emit ServiceRemoved(msg.sender);
     }
 
     function addDeliverable(address user, string calldata id, bytes memory modelRootHash) external {
-        accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
     }
 
     function getDeliverable(
@@ -192,15 +243,18 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         address provider,
         string calldata id
     ) public view returns (Deliverable memory) {
-        return accountMap.getDeliverable(user, provider, id);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.accountMap.getDeliverable(user, provider, id);
     }
 
     function getDeliverables(address user, address provider) public view returns (Deliverable[] memory) {
-        return accountMap.getDeliverables(user, provider);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        return $.accountMap.getDeliverables(user, provider);
     }
 
     function settleFees(VerifierInput calldata verifierInput) external {
-        Account storage account = accountMap.getAccount(verifierInput.user, msg.sender);
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        Account storage account = $.accountMap.getAccount(verifierInput.user, msg.sender);
 
         // Group all validation checks together for gas efficiency
         if (account.providerSigner != verifierInput.providerSigner) {
@@ -234,7 +288,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
             deliverable.encryptedSecret = verifierInput.encryptedSecret;
         } else {
             require(verifierInput.encryptedSecret.length == 0, "secret should be empty");
-            fee = (fee * penaltyPercentage) / 100;
+            fee = (fee * $.penaltyPercentage) / 100;
         }
 
         account.nonce = verifierInput.nonce;
@@ -242,6 +296,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     function _settleFees(Account storage account, uint amount) private {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         uint availableBalance = account.balance - account.pendingRefund;
 
         if (amount > availableBalance) {
@@ -273,7 +328,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         }
 
         account.balance -= amount;
-        ledger.spendFund(account.user, amount);
+        $.ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
         payable(msg.sender).transfer(amount);
     }
