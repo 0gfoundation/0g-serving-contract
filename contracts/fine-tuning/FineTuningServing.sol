@@ -4,13 +4,14 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../utils/Initializable.sol";
 import "./FineTuningAccount.sol";
+import "../ledger/LedgerManager.sol";
 
 using AccountLibrary for AccountLibrary.AccountMap;
 import "./FineTuningService.sol";
 import "./FineTuningVerifier.sol";
-import "../ledger/LedgerManager.sol";
 
 interface ISignatureVerifier {
     function verifySignature(
@@ -20,7 +21,7 @@ interface ISignatureVerifier {
     ) external view returns (bool);
 }
 
-contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing {
+contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing, ERC165 {
     using AccountLibrary for AccountLibrary.AccountMap;
     using ServiceLibrary for ServiceLibrary.ServiceMap;
     using VerifierLibrary for VerifierInput;
@@ -198,7 +199,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing 
         return accountMap.getDeliverables(user, provider);
     }
 
-    function settleFees(VerifierInput calldata verifierInput) external nonReentrant {
+    function settleFees(VerifierInput calldata verifierInput) external {
         Account storage account = accountMap.getAccount(verifierInput.user, msg.sender);
 
         // Group all validation checks together for gas efficiency
@@ -275,5 +276,13 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing 
         ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
         payable(msg.sender).transfer(amount);
+    }
+
+    // === ERC165 Support ===
+    
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return
+            interfaceId == type(IServing).interfaceId ||
+            super.supportsInterface(interfaceId);
     }
 }

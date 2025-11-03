@@ -70,7 +70,16 @@ task("upgrade:forceImportAll", "import contracts").setAction(async (_taskArgs, h
         }
         
         const addr = await (await hre.ethers.getContract(`${name}Impl`)).getAddress();
-        const factory = await hre.ethers.getContractFactory(name);
+        
+        // Determine the correct artifact name
+        let artifactName = name;
+        if (name.includes('_v')) {
+            // For versioned contracts, extract the base contract name
+            // e.g., "InferenceServing_v1.0" -> "InferenceServing"
+            artifactName = name.split('_v')[0];
+        }
+        
+        const factory = await hre.ethers.getContractFactory(artifactName);
         try {
             await hre.upgrades.forceImport(addr, factory, {
                 kind: "beacon",
@@ -91,6 +100,8 @@ task("upgrade:forceImportAll", "import contracts").setAction(async (_taskArgs, h
 
 export async function getProxyInfo(hre: HardhatRuntimeEnvironment) {
     const proxied = new Set<string>();
+    
+    // First, check standard contracts (without versions)
     for (const contractMeta of Object.values(CONTRACTS)) {
         const name = contractMeta.name;
         try {
@@ -100,5 +111,26 @@ export async function getProxyInfo(hre: HardhatRuntimeEnvironment) {
             validateError(e, "No Contract deployed with name");
         }
     }
+    
+    // Then, check versioned contracts
+    const { deployments } = hre;
+    const allDeployments = await deployments.all();
+    
+    for (const [deploymentName] of Object.entries(allDeployments)) {
+        // Check if this is a versioned beacon contract
+        if (deploymentName.endsWith('Beacon') && deploymentName.includes('_v')) {
+            // Extract the base name (e.g., "InferenceServing_v1.0Beacon" -> "InferenceServing_v1.0")
+            const baseName = deploymentName.replace('Beacon', '');
+            
+            // Check if corresponding Impl exists
+            try {
+                await hre.ethers.getContract(`${baseName}Impl`);
+                proxied.add(baseName);
+            } catch (e) {
+                // Impl doesn't exist, skip this one
+            }
+        }
+    }
+    
     return proxied;
 }

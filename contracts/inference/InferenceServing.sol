@@ -4,6 +4,7 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "../utils/Initializable.sol";
 import "./InferenceAccount.sol";
 import "./InferenceService.sol";
@@ -27,7 +28,7 @@ enum SettlementStatus {
     INVALID_SIGNATURE     // 5: Signature verification failed
 }
 
-contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
+contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, ERC165 {
     using AccountLibrary for AccountLibrary.AccountMap;
     using ServiceLibrary for ServiceLibrary.ServiceMap;
 
@@ -53,6 +54,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
     event TEESettlementResult(address indexed user, SettlementStatus status, uint256 unsettledAmount);
     event BatchBalanceUpdated(address[] users, uint256[] balances, uint256[] pendingRefunds);
     error InvalidTEESignature(string reason);
+
 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
         _transferOwnership(owner);
@@ -120,10 +122,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
     function addAccount(
         address user,
         address provider,
-        uint[2] calldata signer,
         string memory additionalInfo
     ) external payable onlyLedger {
-        (uint balance, uint pendingRefund) = accountMap.addAccount(user, provider, signer, msg.value, additionalInfo);
+        (uint balance, uint pendingRefund) = accountMap.addAccount(user, provider, msg.value, additionalInfo);
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -260,13 +261,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
 
     function settleFeesWithTEE(
         TEESettlementData[] calldata settlements
-    ) external nonReentrant returns (
+    ) external returns (
         address[] memory failedUsers,
         SettlementStatus[] memory failureReasons,
         address[] memory partialUsers, 
         uint256[] memory partialAmounts
     ) {
         require(settlements.length > 0, "No settlements provided");
+        require(settlements.length <= 50, "Too many settlements in batch");
 
         failedUsers = new address[](settlements.length);
         failureReasons = new SettlementStatus[](settlements.length);
@@ -433,6 +435,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing {
     ) private pure {
         partialUsers[index] = user;
         partialAmounts[index] = amount;
+    }
+
+    // === ERC165 Support ===
+    
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return
+            interfaceId == type(IServing).interfaceId ||
+            super.supportsInterface(interfaceId);
     }
 
 }

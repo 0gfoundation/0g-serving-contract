@@ -4,54 +4,64 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "../utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+interface IServing {
+    function accountExists(address user, address provider) external view returns (bool);
+    function getPendingRefund(address user, address provider) external view returns (uint);
+    function addAccount(address user, address provider, string memory additionalInfo) external payable;
+    function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable;
+    function requestRefundAll(address user, address provider) external;
+    function processRefund(address user, address provider) external returns (uint totalAmount, uint balance, uint pendingRefund);
+    function deleteAccount(address user, address provider) external;
+}
 
+// Simplified ledger structure
 struct Ledger {
     address user;
     uint availableBalance;
     uint totalBalance;
-    uint[2] inferenceSigner;
     string additionalInfo;
-    address[] inferenceProviders;
-    address[] fineTuningProviders;
+}
+
+// Service information structure
+struct ServiceInfo {
+    address serviceAddress;
+    IServing serviceContract;
+    string serviceType; // "inference" or "fine-tuning"
+    string version;     // "v1.0", "v2.0" etc.
+    string fullName;    // "inference-v2.0"
+    string description;
+    bool isRecommended; // Whether this is the recommended version for this service type
+    uint256 registeredAt;
 }
 
 interface ILedger {
     function spendFund(address user, uint amount) external;
 }
 
-interface IServing {
-    function accountExists(address user, address provider) external view returns (bool);
-
-    function getPendingRefund(address user, address provider) external view returns (uint);
-
-    function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable;
-
-    function requestRefundAll(address user, address provider) external;
-
-    function processRefund(
-        address user,
-        address provider
-    ) external returns (uint totalAmount, uint balance, uint pendingRefund);
-
-    function deleteAccount(address user, address provider) external;
-}
 
 contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableSet for EnumerableSet.AddressSet;
+    using ERC165Checker for address;
 
-    address payable public inferenceAddress;
-    address payable public fineTuningAddress;
+    // Service registry (using address as key)
+    mapping(address => ServiceInfo) private registeredServices;
+    mapping(string => address) private serviceNameToAddress; // "inference-v2.0" => address
+    EnumerableSet.AddressSet private serviceAddresses;
+    
     LedgerMap private ledgerMap;
-    mapping(address => EnumerableSet.AddressSet) private userInferenceProviders;
-    mapping(address => EnumerableSet.AddressSet) private userFineTuningProviders;
-    IServing private fineTuningAccount;
-    IServing private inferenceAccount;
+    mapping(address => mapping(string => EnumerableSet.AddressSet)) private userServiceProviders; // user => serviceType => providers
 
     // Constants
     uint public constant MAX_PROVIDERS_PER_BATCH = 20;
+    bytes4 private constant SERVING_INTERFACE_ID = type(IServing).interfaceId;
+
+    // Events
+    event ServiceRegistered(address indexed serviceAddress, string serviceName);
+    event RecommendedServiceUpdated(string indexed serviceType, string version, address serviceAddress);
 
     // Errors
     error LedgerNotExists(address user);
@@ -59,6 +69,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     error InsufficientBalance(address user);
     error TooManyProviders(uint requested, uint maximum);
     error InvalidServiceType(string serviceType);
+    error ServiceNotRegistered(address serviceAddress);
+    error ServiceNameExists(string serviceName);
+    error InvalidServiceAddress(address serviceAddress);
 
     struct LedgerMap {
         EnumerableSet.Bytes32Set _keys;
@@ -77,22 +90,15 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function initialize(
-        address _inferenceAddress,
-        address _fineTuningAddress,
         address owner
     ) public onlyInitializeOnce {
         _transferOwnership(owner);
-
-        inferenceAddress = payable(_inferenceAddress);
-        fineTuningAddress = payable(_fineTuningAddress);
-        fineTuningAccount = IServing(fineTuningAddress);
-        inferenceAccount = IServing(inferenceAddress);
     }
 
     modifier onlyServing() {
         require(
-            msg.sender == fineTuningAddress || msg.sender == inferenceAddress,
-            "Caller is not the fine tuning or inference contract"
+            registeredServices[msg.sender].serviceAddress != address(0),
+            "Caller is not a registered service"
         );
         _;
     }
@@ -119,15 +125,30 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         return (ledgers, total);
     }
 
+    // Get providers for a specific user and service
+    function getLedgerProviders(address user, string memory serviceName) public view returns (address[] memory) {
+        address serviceAddress = serviceNameToAddress[serviceName];
+        require(serviceAddress != address(0), "Service not found");
+        
+        string memory serviceType = registeredServices[serviceAddress].serviceType;
+        EnumerableSet.AddressSet storage providers = userServiceProviders[user][serviceType];
+        address[] memory providerList = new address[](providers.length());
+        
+        for (uint256 i = 0; i < providers.length(); i++) {
+            providerList[i] = providers.at(i);
+        }
+        
+        return providerList;
+    }
+
     function addLedger(
-        uint[2] calldata inferenceSigner,
         string memory additionalInfo
     ) external payable withLedgerLock(msg.sender) returns (uint, uint) {
         bytes32 key = _key(msg.sender);
         if (_contains(key)) {
             revert LedgerExists(msg.sender);
         }
-        _set(key, msg.sender, inferenceSigner, msg.value, additionalInfo);
+        _set(key, msg.sender, msg.value, additionalInfo);
         return (msg.value, 0);
     }
 
@@ -148,13 +169,22 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         payable(msg.sender).transfer(amount);
     }
 
+    // Enhanced transferFund with dynamic service support
     function transferFund(
         address provider,
-        string memory serviceTypeStr,
+        string memory serviceName,
         uint amount
     ) external withLedgerLock(msg.sender) {
         Ledger storage ledger = _get(msg.sender);
-        (address servingAddress, IServing serving, bool isInference) = _getServiceDetails(serviceTypeStr);
+        
+        // Dynamic service lookup
+        address serviceAddress = serviceNameToAddress[serviceName];
+        require(serviceAddress != address(0), "Service not found");
+        
+        ServiceInfo storage service = registeredServices[serviceAddress];
+        
+        address servingAddress = service.serviceAddress;
+        IServing serving = service.serviceContract;
 
         uint transferAmount = amount;
         bytes memory payload;
@@ -172,25 +202,16 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
                 cancelRetrievingAmount
             );
         } else {
-            // New account
-            if (isInference) {
-                payload = abi.encodeWithSignature(
-                    "addAccount(address,address,uint256[2],string)",
-                    msg.sender,
-                    provider,
-                    ledger.inferenceSigner,
-                    ledger.additionalInfo
-                );
-            } else {
-                payload = abi.encodeWithSignature(
-                    "addAccount(address,address,string)",
-                    msg.sender,
-                    provider,
-                    ledger.additionalInfo
-                );
-            }
-            // Add provider to optimized storage
-            _addProvider(msg.sender, provider, isInference);
+            // New account - use unified addAccount interface
+            payload = abi.encodeWithSignature(
+                "addAccount(address,address,string)",
+                msg.sender,
+                provider,
+                ledger.additionalInfo
+            );
+            
+            // Add provider to service storage
+            _addProviderToService(msg.sender, service.serviceType, provider);
         }
 
         require(ledger.availableBalance >= transferAmount, "Insufficient balance");
@@ -208,7 +229,14 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
             revert TooManyProviders(providers.length, MAX_PROVIDERS_PER_BATCH);
         }
 
-        (, IServing serving, ) = _getServiceDetails(serviceType);
+        // Dynamic service lookup
+        address serviceAddress = serviceNameToAddress[serviceType];
+        require(serviceAddress != address(0), "Service not found");
+        
+        ServiceInfo storage service = registeredServices[serviceAddress];
+        
+        IServing serving = service.serviceContract;
+        
         Ledger storage ledger = _get(msg.sender);
         uint totalAmount = 0;
 
@@ -221,82 +249,209 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function deleteLedger() external nonReentrant withLedgerLock(msg.sender) {
+        Ledger storage ledger = _get(msg.sender);
+        
+        // Safety check: ensure all funds have been withdrawn
+        require(ledger.totalBalance == 0, "Must withdraw all funds first");
+        
         bytes32 key = _key(msg.sender);
 
-        // Delete all inference accounts
-        EnumerableSet.AddressSet storage inferenceProvs = userInferenceProviders[msg.sender];
-        address[] memory inferenceList = new address[](inferenceProvs.length());
-        for (uint i = 0; i < inferenceProvs.length(); i++) {
-            inferenceList[i] = inferenceProvs.at(i);
-        }
-        for (uint i = 0; i < inferenceList.length; i++) {
-            try inferenceAccount.deleteAccount(msg.sender, inferenceList[i]) {
-                inferenceProvs.remove(inferenceList[i]);
-            } catch {
-                inferenceProvs.remove(inferenceList[i]); // Remove even on failure
+        // Delete all service accounts dynamically
+        uint256 serviceCount = serviceAddresses.length();
+        for (uint256 i = 0; i < serviceCount; i++) {
+            address serviceAddress = serviceAddresses.at(i);
+            ServiceInfo storage service = registeredServices[serviceAddress];
+            
+            EnumerableSet.AddressSet storage providers = userServiceProviders[msg.sender][service.serviceType];
+            address[] memory providerList = new address[](providers.length());
+            for (uint j = 0; j < providers.length(); j++) {
+                providerList[j] = providers.at(j);
+            }
+            
+            for (uint j = 0; j < providerList.length; j++) {
+                try service.serviceContract.deleteAccount(msg.sender, providerList[j]) {
+                    providers.remove(providerList[j]);
+                } catch {
+                    providers.remove(providerList[j]); // Remove even on failure
+                }
             }
         }
-
-        // Delete all fine-tuning accounts
-        EnumerableSet.AddressSet storage finetuningProvs = userFineTuningProviders[msg.sender];
-        address[] memory finetuningList = new address[](finetuningProvs.length());
-        for (uint i = 0; i < finetuningProvs.length(); i++) {
-            finetuningList[i] = finetuningProvs.at(i);
-        }
-        for (uint i = 0; i < finetuningList.length; i++) {
-            try fineTuningAccount.deleteAccount(msg.sender, finetuningList[i]) {
-                finetuningProvs.remove(finetuningList[i]);
-            } catch {
-                finetuningProvs.remove(finetuningList[i]); // Remove even on failure
-            }
-        }
-
-        // Clear legacy arrays
-        Ledger storage ledger = _get(msg.sender);
-        delete ledger.inferenceProviders;
-        delete ledger.fineTuningProviders;
 
         // Delete main ledger
         ledgerMap._keys.remove(key);
         delete ledgerMap._values[key];
     }
 
-    function _addProvider(address user, address provider, bool isInference) private {
-        EnumerableSet.AddressSet storage providers = isInference
-            ? userInferenceProviders[user]
-            : userFineTuningProviders[user];
+    // === Service Registration Management ===
 
-        // Only add if not already exists
-        if (!providers.contains(provider)) {
-            providers.add(provider);
+    function registerService(
+        string memory serviceType,
+        string memory version,
+        address serviceAddress,
+        string memory description
+    ) external onlyOwner {
+        require(serviceAddress != address(0), "Invalid service address");
+        require(bytes(serviceType).length > 0, "Service type required");
+        require(bytes(version).length > 0, "Version required");
+        require(registeredServices[serviceAddress].serviceAddress == address(0), "Service already registered");
+        
+        string memory fullName = string(abi.encodePacked(serviceType, "-", version));
+        require(serviceNameToAddress[fullName] == address(0), "Service name already exists");
+        
+        // Check interface support
+        require(
+            serviceAddress.supportsInterface(type(IERC165).interfaceId),
+            "Service must support ERC165 interface detection"
+        );
+        require(
+            serviceAddress.supportsInterface(SERVING_INTERFACE_ID),
+            "Service must implement IServing interface"
+        );
+        
+        // Register service (default not recommended)
+        registeredServices[serviceAddress] = ServiceInfo({
+            serviceAddress: serviceAddress,
+            serviceContract: IServing(serviceAddress),
+            serviceType: serviceType,
+            version: version,
+            fullName: fullName,
+            description: description,
+            isRecommended: false, // Default not recommended
+            registeredAt: block.timestamp
+        });
+        
+        serviceNameToAddress[fullName] = serviceAddress;
+        serviceAddresses.add(serviceAddress);
+        
+        emit ServiceRegistered(serviceAddress, fullName);
+    }
 
-            // Also update legacy array for backwards compatibility
-            Ledger storage ledger = _get(user);
-            if (isInference) {
-                ledger.inferenceProviders.push(provider);
-            } else {
-                ledger.fineTuningProviders.push(provider);
+    function setRecommendedService(
+        string memory serviceType,
+        string memory version
+    ) external onlyOwner {
+        string memory fullName = string(abi.encodePacked(serviceType, "-", version));
+        address serviceAddress = serviceNameToAddress[fullName];
+        require(serviceAddress != address(0), "Service not found");
+        
+        // Clear all recommended flags for this service type
+        _clearRecommendedServices(serviceType);
+        
+        // Set new recommended service
+        registeredServices[serviceAddress].isRecommended = true;
+        
+        emit RecommendedServiceUpdated(serviceType, version, serviceAddress);
+    }
+    
+    function _clearRecommendedServices(string memory serviceType) internal {
+        uint256 count = serviceAddresses.length();
+        for (uint256 i = 0; i < count; i++) {
+            address serviceAddr = serviceAddresses.at(i);
+            ServiceInfo storage service = registeredServices[serviceAddr];
+            
+            if (keccak256(abi.encodePacked(service.serviceType)) == keccak256(abi.encodePacked(serviceType))) {
+                service.isRecommended = false;
             }
         }
     }
 
-    function _getServiceDetails(string memory serviceType) private view returns (address, IServing, bool) {
-        bytes32 serviceTypeHash = keccak256(abi.encodePacked(serviceType));
+    function getServiceInfo(address serviceAddress) external view returns (ServiceInfo memory) {
+        return registeredServices[serviceAddress];
+    }
 
-        if (serviceTypeHash == keccak256("inference")) {
-            return (inferenceAddress, inferenceAccount, true);
-        } else if (serviceTypeHash == keccak256("fine-tuning")) {
-            return (fineTuningAddress, fineTuningAccount, false);
-        } else {
-            revert InvalidServiceType(serviceType);
+    function getServiceAddressByName(string memory serviceName) external view returns (address) {
+        return serviceNameToAddress[serviceName];
+    }
+
+    function getAllActiveServices() external view returns (ServiceInfo[] memory) {
+        uint256 count = serviceAddresses.length();
+        ServiceInfo[] memory services = new ServiceInfo[](count);
+        
+        for (uint256 i = 0; i < count; i++) {
+            address serviceAddress = serviceAddresses.at(i);
+            services[i] = registeredServices[serviceAddress];
         }
+        
+        return services;
+    }
+    
+    function getRecommendedService(string memory serviceType) 
+        external view returns (string memory version, address serviceAddress) {
+        uint256 count = serviceAddresses.length();
+        for (uint256 i = 0; i < count; i++) {
+            address addr = serviceAddresses.at(i);
+            ServiceInfo storage service = registeredServices[addr];
+            
+            if (keccak256(abi.encodePacked(service.serviceType)) == keccak256(abi.encodePacked(serviceType)) 
+                && service.isRecommended) {
+                return (service.version, addr);
+            }
+        }
+        revert("No recommended service found for this type");
+    }
+    
+    function getAllVersions(string memory serviceType) 
+        external view returns (
+            string[] memory versions,
+            address[] memory addresses,
+            bool[] memory isRecommendedFlags
+        ) {
+        // First count matching services
+        uint256 count = serviceAddresses.length();
+        uint256 matchCount = 0;
+        for (uint256 i = 0; i < count; i++) {
+            address addr = serviceAddresses.at(i);
+            ServiceInfo storage service = registeredServices[addr];
+            if (keccak256(abi.encodePacked(service.serviceType)) == keccak256(abi.encodePacked(serviceType))) {
+                matchCount++;
+            }
+        }
+        
+        // Allocate arrays
+        versions = new string[](matchCount);
+        addresses = new address[](matchCount);
+        isRecommendedFlags = new bool[](matchCount);
+        
+        // Fill arrays
+        uint256 index = 0;
+        for (uint256 i = 0; i < count; i++) {
+            address addr = serviceAddresses.at(i);
+            ServiceInfo storage service = registeredServices[addr];
+            if (keccak256(abi.encodePacked(service.serviceType)) == keccak256(abi.encodePacked(serviceType))) {
+                versions[index] = service.version;
+                addresses[index] = addr;
+                isRecommendedFlags[index] = service.isRecommended;
+                index++;
+            }
+        }
+    }
+    
+    function isRecommendedVersion(string memory serviceType, string memory version)
+        external view returns (bool) {
+        string memory fullName = string(abi.encodePacked(serviceType, "-", version));
+        address serviceAddress = serviceNameToAddress[fullName];
+        if (serviceAddress == address(0)) {
+            return false;
+        }
+        return registeredServices[serviceAddress].isRecommended;
+    }
+
+    function _addProviderToService(address user, string memory serviceType, address provider) private {
+        EnumerableSet.AddressSet storage providers = userServiceProviders[user][serviceType];
+        providers.add(provider);
     }
 
     function spendFund(address user, uint amount) external onlyServing {
+        // Use withLedgerLock to ensure single-user atomicity
+        bytes32 key = _key(user);
+        require(!ledgerMap._operationLocks[key], "Ledger locked for operation");
+        ledgerMap._operationLocks[key] = true;
+        
         Ledger storage ledger = _get(user);
         require((ledger.totalBalance - ledger.availableBalance) >= amount, "Insufficient balance");
-
         ledger.totalBalance -= amount;
+        
+        ledgerMap._operationLocks[key] = false;
     }
 
     function _at(uint index) internal view returns (Ledger storage) {
@@ -320,10 +475,10 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         return ledgerMap._values[key];
     }
 
+    // Simplified _set without signer parameter
     function _set(
         bytes32 key,
         address user,
-        uint[2] calldata inferenceSigner,
         uint balance,
         string memory additionalInfo
     ) internal {
@@ -331,7 +486,6 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         ledger.availableBalance = balance;
         ledger.totalBalance = balance;
         ledger.user = user;
-        ledger.inferenceSigner = inferenceSigner;
         ledger.additionalInfo = additionalInfo;
         ledgerMap._keys.add(key);
     }

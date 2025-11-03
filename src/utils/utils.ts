@@ -36,8 +36,10 @@ class ContractMeta<T> {
 
     contractName() {
         // this.factory is undefined when the typechain files are not generated yet
-
-        return this.factory?.name.slice(0, -FACTORY_POSTFIX.length);
+        if (!this.factory?.name) {
+            return "UnknownContract";
+        }
+        return this.factory.name.slice(0, -FACTORY_POSTFIX.length);
     }
 }
 
@@ -47,9 +49,9 @@ const ADDR_LENGTH = 20;
 const NONCE_LENGTH = 8;
 
 export const CONTRACTS = {
-    LedgerManager: new ContractMeta(Factories.LedgerManager__factory),
-    InferenceServing: new ContractMeta(Factories.InferenceServing__factory),
-    FineTuningServing: new ContractMeta(Factories.FineTuningServing__factory),
+    LedgerManager: new ContractMeta(Factories.LedgerManager__factory, "LedgerManager"),
+    InferenceServing: new ContractMeta(Factories.InferenceServing__factory, "InferenceServing"),
+    FineTuningServing: new ContractMeta(Factories.FineTuningServing__factory, "FineTuningServing"),
 } as const;
 
 type GetContractTypeFromContractMeta<F> = F extends ContractMeta<infer C> ? C : never;
