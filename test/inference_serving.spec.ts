@@ -49,6 +49,11 @@ describe("Inference Serving", () => {
 
     const additionalData = "U2FsdGVkX18cuPVgRkw/sHPq2YzJE5MyczGO0vOTQBBiS9A4Pka5woWK82fZr0Xjh8mDhjlW9ARsX6e6sKDChg==";
 
+    // TEE Wallet for testing
+    const teePrivateKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+    const teeWallet = new ethers.Wallet(teePrivateKey);
+    const teeSignerAddress = teeWallet.address;
+
     beforeEach(async () => {
         await deployments.fixture(["test-services"]);
         servingDeployment = await deployments.get("InferenceServing_test");
@@ -87,6 +92,7 @@ describe("Inference Serving", () => {
                 inputPrice: provider1InputPrice,
                 outputPrice: provider1OutputPrice,
                 additionalInfo: "",
+                teeSignerAddress: teeSignerAddress,
             }),
             serving.connect(provider2).addOrUpdateService({
                 serviceType: provider2ServiceType,
@@ -96,6 +102,7 @@ describe("Inference Serving", () => {
                 inputPrice: provider2InputPrice,
                 outputPrice: provider2OutputPrice,
                 additionalInfo: "",
+                teeSignerAddress: user1Address,
             }),
         ]);
     });
@@ -107,6 +114,51 @@ describe("Inference Serving", () => {
 
             const result = await serving.lockTime();
             expect(result).to.equal(BigInt(updatedLockTime));
+        });
+
+        it("should allow owner to acknowledge TEE signer", async () => {
+            // Check initial state - should not be acknowledged
+            const serviceBefore = await serving.getService(provider1Address);
+            expect(serviceBefore.teeSignerAcknowledged).to.be.false;
+
+            // Owner acknowledges TEE signer
+            await expect(serving.connect(owner).acknowledgeTEESigner(provider1Address))
+                .to.emit(serving, "ProviderTEESignerAcknowledged")
+                .withArgs(provider1Address, teeSignerAddress, true);
+
+            // Check state after acknowledgement
+            const serviceAfter = await serving.getService(provider1Address);
+            expect(serviceAfter.teeSignerAcknowledged).to.be.true;
+            expect(serviceAfter.teeSignerAddress).to.equal(teeSignerAddress);
+        });
+
+        it("should allow owner to revoke TEE signer acknowledgement", async () => {
+            // First acknowledge
+            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            
+            // Verify acknowledged
+            let service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.true;
+
+            // Revoke acknowledgement
+            await expect(serving.connect(owner).revokeTEESignerAcknowledgement(provider1Address))
+                .to.emit(serving, "ProviderTEESignerAcknowledged")
+                .withArgs(provider1Address, teeSignerAddress, false);
+
+            // Check state after revocation
+            service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.false;
+            expect(service.teeSignerAddress).to.equal(teeSignerAddress); // Address should remain
+        });
+
+        it("should fail when non-owner tries to acknowledge TEE signer", async () => {
+            await expect(serving.connect(user1).acknowledgeTEESigner(provider1Address))
+                .to.be.revertedWith("Ownable: caller is not the owner");
+        });
+
+        it("should fail when non-owner tries to revoke TEE signer acknowledgement", async () => {
+            await expect(serving.connect(user1).revokeTEESignerAcknowledgement(provider1Address))
+                .to.be.revertedWith("Ownable: caller is not the owner");
         });
     });
 
@@ -425,6 +477,7 @@ describe("Inference Serving", () => {
                     inputPrice: modifiedInputPrice,
                     outputPrice: modifiedOutputPrice,
                     additionalInfo: "",
+                    teeSignerAddress: teeSignerAddress,
                 })
             )
                 .to.emit(serving, "ServiceUpdated")
@@ -458,21 +511,81 @@ describe("Inference Serving", () => {
             const services = await serving.getAllServices();
             expect(services.length).to.equal(1);
         });
+
+        it("should reset acknowledgement when critical fields are updated", async () => {
+            // First, owner acknowledges the TEE signer
+            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            
+            // Verify it's acknowledged
+            let service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.true;
+            
+            // Update only price and URL (should NOT reset acknowledgement)
+            await serving.connect(provider1).addOrUpdateService({
+                serviceType: provider1ServiceType,
+                url: "https://new-url.com",  // Changed URL
+                model: provider1Model,
+                verifiability: provider1Verifiability,
+                inputPrice: 200,  // Changed price
+                outputPrice: 300,  // Changed price
+                additionalInfo: "",
+                teeSignerAddress: teeSignerAddress,
+            });
+            
+            // Acknowledgement should still be true
+            service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.true;
+            
+            // Update model (critical field - should reset acknowledgement)
+            await serving.connect(provider1).addOrUpdateService({
+                serviceType: provider1ServiceType,
+                url: "https://new-url.com",
+                model: "gpt-4",  // Changed model (critical field)
+                verifiability: provider1Verifiability,
+                inputPrice: 200,
+                outputPrice: 300,
+                additionalInfo: "",
+                teeSignerAddress: teeSignerAddress,
+            });
+            
+            // Acknowledgement should be reset to false
+            service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.false;
+            
+            // Re-acknowledge
+            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.true;
+            
+            // Update TEE signer address (critical field - should reset acknowledgement)
+            const newTeeSignerAddress = "0x90F79bf6EB2c4f870365E785982E1f101E93b906";
+            await serving.connect(provider1).addOrUpdateService({
+                serviceType: provider1ServiceType,
+                url: "https://new-url.com",
+                model: "gpt-4",
+                verifiability: provider1Verifiability,
+                inputPrice: 200,
+                outputPrice: 300,
+                additionalInfo: "",
+                teeSignerAddress: newTeeSignerAddress,  // Changed TEE signer (critical field)
+            });
+            
+            // Acknowledgement should be reset to false
+            service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.false;
+            expect(service.teeSignerAddress).to.equal(newTeeSignerAddress);
+        });
     });
 
     describe("TEE Settlement", () => {
         const testFee = 50;
         const testRequestsHash = ethers.keccak256(ethers.toUtf8Bytes("test_requests_hash"));
 
-        // Create a separate wallet for TEE signing
-        const teePrivateKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-        const teeWallet = new ethers.Wallet(teePrivateKey);
-        const teeSignerAddress = teeWallet.address;
+        // Use the TEE wallet defined at module level
 
         beforeEach(async () => {
-            // Acknowledge TEE signer for both users - using a dedicated TEE signer
-            await serving.connect(owner).acknowledgeTEESigner(provider1Address, teeSignerAddress);
-            await serving.connect(user1).acknowledgeTEESigner(provider1Address, teeSignerAddress);
+            // Owner acknowledges TEE signer for provider1 (now owner-level acknowledgement)
+            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
         });
 
         async function createValidTEESettlement(
@@ -683,6 +796,52 @@ describe("Inference Serving", () => {
             await expect(serving.connect(provider1).settleFeesWithTEE([])).to.be.revertedWith(
                 "No settlements provided"
             );
+        });
+
+        it("should fail settlement when provider TEE signer is not acknowledged", async () => {
+            // First revoke acknowledgement for provider1
+            await serving.connect(owner).revokeTEESignerAcknowledgement(provider1Address);
+            
+            // Verify the provider is not acknowledged
+            const service = await serving.getService(provider1Address);
+            expect(service.teeSignerAcknowledged).to.be.false;
+
+            const nonce = BigInt(Date.now());
+            const settlement = await createValidTEESettlement(
+                ownerAddress,
+                provider1Address,
+                BigInt(testFee),
+                testRequestsHash,
+                nonce
+            );
+
+            // Get initial balance
+            const initialBalance = await serving.getAccount(ownerAddress, provider1Address);
+
+            // Execute settlement - should fail due to no TEE signer acknowledgement
+            const result = await serving.connect(provider1).settleFeesWithTEE([settlement]);
+            const receipt = await result.wait();
+
+            // Find the TEESettlementResult event
+            const event = receipt!.logs.find(log => {
+                try {
+                    const parsed = serving.interface.parseLog(log);
+                    return parsed!.name === "TEESettlementResult";
+                } catch {
+                    return false;
+                }
+            });
+
+            expect(event).to.not.be.undefined;
+            const parsedEvent = serving.interface.parseLog(event!);
+            expect(parsedEvent!.args.user).to.equal(ownerAddress);
+            expect(parsedEvent!.args.status).to.equal(3); // SettlementStatus.NO_TEE_SIGNER
+            expect(parsedEvent!.args.unsettledAmount).to.equal(BigInt(testFee));
+
+            // Verify balance unchanged (settlement failed)
+            const finalBalance = await serving.getAccount(ownerAddress, provider1Address);
+            expect(finalBalance.balance).to.equal(initialBalance.balance);
+            expect(finalBalance.nonce).to.equal(initialBalance.nonce);
         });
 
         it("should handle provider mismatch", async () => {

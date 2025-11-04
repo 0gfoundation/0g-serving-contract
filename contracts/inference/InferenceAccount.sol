@@ -11,7 +11,6 @@ struct Account {
     uint pendingRefund;
     Refund[] refunds;
     string additionalInfo;
-    uint[2] providerPubKey;
     address teeSignerAddress; // TEE ECDSA signer address for settlement verification
     uint validRefundsLength; // Track the number of valid (non-dirty) refunds
 }
@@ -198,26 +197,6 @@ library AccountLibrary {
         map._userIndex[user].remove(key);
         map._keys.remove(key);
         delete map._values[key];
-    }
-
-    function acknowledgeProviderSigner(
-        AccountMap storage map,
-        address user,
-        address provider,
-        uint[2] calldata providerPubKey
-    ) internal {
-        Account storage account = _get(map, user, provider);
-        account.providerPubKey = providerPubKey;
-    }
-
-    function acknowledgeTEESigner(
-        AccountMap storage map,
-        address user,
-        address provider,
-        address teeSignerAddress
-    ) internal {
-        Account storage account = _get(map, user, provider);
-        account.teeSignerAddress = teeSignerAddress;
     }
 
     function depositFund(

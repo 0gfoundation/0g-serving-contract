@@ -76,6 +76,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event ServiceRemoved(address indexed service);
     event TEESettlementResult(address indexed user, SettlementStatus status, uint256 unsettledAmount);
     event BatchBalanceUpdated(address[] users, uint256[] balances, uint256[] pendingRefunds);
+    event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
     error InvalidTEESignature(string reason);
 
 
@@ -134,14 +135,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.accountMap.getBatchAccountsByUsers(users, msg.sender);
     }
 
-    function acknowledgeProviderSigner(address provider, uint[2] calldata providerPubKey) external {
+    function acknowledgeTEESigner(address provider) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        $.accountMap.acknowledgeProviderSigner(msg.sender, provider, providerPubKey);
+        Service storage service = $.serviceMap.getService(provider);
+        $.serviceMap.acknowledgeTEESigner(provider);
+        emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, true);
     }
 
-    function acknowledgeTEESigner(address provider, address teeSignerAddress) external {
+    function revokeTEESignerAcknowledgement(address provider) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        $.accountMap.acknowledgeTEESigner(msg.sender, provider, teeSignerAddress);
+        Service storage service = $.serviceMap.getService(provider);
+        $.serviceMap.revokeTEESignerAcknowledgement(provider);
+        emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, false);
     }
 
     function accountExists(address user, address provider) public view returns (bool) {
@@ -366,8 +371,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
-        // Validate TEE signer
-        if (account.teeSignerAddress == address(0)) {
+        // Validate TEE signer using service configuration
+        Service storage service = $.serviceMap.getService(msg.sender);
+        if (!service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
             return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee);
         }
 
@@ -377,7 +383,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
 
         // Validate signature
-        if (!_verifySignature(settlement, account.teeSignerAddress)) {
+        if (!_verifySignature(settlement, service.teeSignerAddress)) {
             return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee);
         }
 
@@ -397,8 +403,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
-        // Validate TEE signer
-        if (account.teeSignerAddress == address(0)) {
+        // Validate TEE signer using service configuration
+        Service storage service = $.serviceMap.getService(msg.sender);
+        if (!service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
             return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee, 0);
         }
 
@@ -408,7 +415,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
 
         // Validate signature
-        if (!_verifySignature(settlement, account.teeSignerAddress)) {
+        if (!_verifySignature(settlement, service.teeSignerAddress)) {
             return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee, 0);
         }
 
