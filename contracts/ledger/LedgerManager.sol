@@ -171,9 +171,30 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
     function depositFund() external payable withLedgerLock(msg.sender) {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
-        Ledger storage ledger = _get($, msg.sender);
-        ledger.availableBalance += msg.value;
-        ledger.totalBalance += msg.value;
+        bytes32 key = _key(msg.sender);
+        
+        // Create account if it doesn't exist
+        if (!_contains($, key)) {
+            _set($, key, msg.sender, msg.value, "");
+        } else {
+            Ledger storage ledger = _get($, msg.sender);
+            ledger.availableBalance += msg.value;
+            ledger.totalBalance += msg.value;
+        }
+    }
+
+    function depositFundFor(address recipient) external payable withLedgerLock(recipient) {
+        LedgerManagerStorage storage $ = _getLedgerManagerStorage();
+        bytes32 key = _key(recipient);
+        
+        // Create account if it doesn't exist
+        if (!_contains($, key)) {
+            _set($, key, recipient, msg.value, "");
+        } else {
+            Ledger storage ledger = _get($, recipient);
+            ledger.availableBalance += msg.value;
+            ledger.totalBalance += msg.value;
+        }
     }
 
     function refund(uint amount) external withLedgerLock(msg.sender) {

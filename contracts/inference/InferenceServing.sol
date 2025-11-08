@@ -135,12 +135,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.accountMap.getBatchAccountsByUsers(users, msg.sender);
     }
 
-    function acknowledgeTEESigner(address provider) external onlyOwner {
+    function acknowledgeTEESignerByOwner(address provider) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Service storage service = $.serviceMap.getService(provider);
         $.serviceMap.acknowledgeTEESigner(provider);
         emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, true);
     }
+
+    function acknowledgeTEESigner(address provider, bool acknowledged) external {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.acknowledgeTEESigner(msg.sender, provider, acknowledged);
+    }
+
 
     function revokeTEESignerAcknowledgement(address provider) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
@@ -371,9 +377,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
-        // Validate TEE signer using service configuration
+        // Validate TEE signer acknowledgement - both user and service must be acknowledged, and service must have valid TEE signer address
         Service storage service = $.serviceMap.getService(msg.sender);
-        if (!service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
+        if (!account.acknowledged || !service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
             return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee);
         }
 
@@ -382,7 +388,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             return (SettlementStatus.INVALID_NONCE, settlement.totalFee);
         }
 
-        // Validate signature
+        // Validate signature using service TEE signer address
         if (!_verifySignature(settlement, service.teeSignerAddress)) {
             return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee);
         }
@@ -403,9 +409,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
-        // Validate TEE signer using service configuration
+        // Validate TEE signer acknowledgement - both user and service must be acknowledged, and service must have valid TEE signer address
         Service storage service = $.serviceMap.getService(msg.sender);
-        if (!service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
+        if (!account.acknowledged || !service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
             return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee, 0);
         }
 
@@ -414,7 +420,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             return (SettlementStatus.INVALID_NONCE, settlement.totalFee, 0);
         }
 
-        // Validate signature
+        // Validate signature using service TEE signer address
         if (!_verifySignature(settlement, service.teeSignerAddress)) {
             return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee, 0);
         }

@@ -122,7 +122,7 @@ describe("Inference Serving", () => {
             expect(serviceBefore.teeSignerAcknowledged).to.be.false;
 
             // Owner acknowledges TEE signer
-            await expect(serving.connect(owner).acknowledgeTEESigner(provider1Address))
+            await expect(serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address))
                 .to.emit(serving, "ProviderTEESignerAcknowledged")
                 .withArgs(provider1Address, teeSignerAddress, true);
 
@@ -134,7 +134,7 @@ describe("Inference Serving", () => {
 
         it("should allow owner to revoke TEE signer acknowledgement", async () => {
             // First acknowledge
-            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
             
             // Verify acknowledged
             let service = await serving.getService(provider1Address);
@@ -152,7 +152,7 @@ describe("Inference Serving", () => {
         });
 
         it("should fail when non-owner tries to acknowledge TEE signer", async () => {
-            await expect(serving.connect(user1).acknowledgeTEESigner(provider1Address))
+            await expect(serving.connect(user1).acknowledgeTEESignerByOwner(provider1Address))
                 .to.be.revertedWith("Ownable: caller is not the owner");
         });
 
@@ -514,7 +514,7 @@ describe("Inference Serving", () => {
 
         it("should reset acknowledgement when critical fields are updated", async () => {
             // First, owner acknowledges the TEE signer
-            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
             
             // Verify it's acknowledged
             let service = await serving.getService(provider1Address);
@@ -553,7 +553,7 @@ describe("Inference Serving", () => {
             expect(service.teeSignerAcknowledged).to.be.false;
             
             // Re-acknowledge
-            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
             service = await serving.getService(provider1Address);
             expect(service.teeSignerAcknowledged).to.be.true;
             
@@ -585,7 +585,11 @@ describe("Inference Serving", () => {
 
         beforeEach(async () => {
             // Owner acknowledges TEE signer for provider1 (now owner-level acknowledgement)
-            await serving.connect(owner).acknowledgeTEESigner(provider1Address);
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
+            
+            // Users acknowledge TEE signer at account level for the tests
+            await serving.connect(owner).acknowledgeTEESigner(provider1Address, true);
+            await serving.connect(user1).acknowledgeTEESigner(provider1Address, true);
         });
 
         async function createValidTEESettlement(
@@ -682,8 +686,6 @@ describe("Inference Serving", () => {
                 nonce
             );
 
-            // Get initial balance to verify it doesn't change after failed settlement
-            const initialBalance = await serving.getAccount(ownerAddress, provider1Address);
 
             // Execute settlement - should partially succeed (settle available balance)
             await serving.connect(provider1).settleFeesWithTEE([settlement]);
@@ -719,7 +721,6 @@ describe("Inference Serving", () => {
 
             // Get initial balances
             const initialBalance1 = await serving.getAccount(user1Address, provider1Address);
-            const initialBalance2 = await serving.getAccount(ownerAddress, provider1Address);
 
             // Execute mixed batch - one full success, one partial success
             await serving.connect(provider1).settleFeesWithTEE([potentialSuccessSettlement, definiteFailSettlement]);
@@ -799,12 +800,12 @@ describe("Inference Serving", () => {
         });
 
         it("should fail settlement when provider TEE signer is not acknowledged", async () => {
-            // First revoke acknowledgement for provider1
+            // Revoke owner-level TEE signer acknowledgement for provider1
             await serving.connect(owner).revokeTEESignerAcknowledgement(provider1Address);
             
-            // Verify the provider is not acknowledged
+            // Verify the service has no TEE signer acknowledgement
             const service = await serving.getService(provider1Address);
-            expect(service.teeSignerAcknowledged).to.be.false;
+            expect(service.teeSignerAcknowledged).to.equal(false);
 
             const nonce = BigInt(Date.now());
             const settlement = await createValidTEESettlement(
@@ -818,7 +819,7 @@ describe("Inference Serving", () => {
             // Get initial balance
             const initialBalance = await serving.getAccount(ownerAddress, provider1Address);
 
-            // Execute settlement - should fail due to no TEE signer acknowledgement
+            // Execute settlement - should fail due to no service-level TEE signer acknowledgement
             const result = await serving.connect(provider1).settleFeesWithTEE([settlement]);
             const receipt = await result.wait();
 
@@ -941,14 +942,14 @@ describe("Inference Serving", () => {
 
             it("should handle mixed batch with partial and full settlements", async () => {
                 const nonce1 = BigInt(Date.now());
-                const nonce2 = nonce1 + 1n;
+                const nonce2 = nonce1 + BigInt(1);
                 
                 // Get initial balances
                 const ownerInitialBalance = await serving.getAccount(ownerAddress, provider1Address);
                 const user1InitialBalance = await serving.getAccount(user1Address, provider1Address);
                 
                 // Settlement 1: Owner with insufficient balance (partial)
-                const ownerRequestedFee = ownerInitialBalance.balance + 30n;
+                const ownerRequestedFee = ownerInitialBalance.balance + BigInt(30);
                 const ownerSettlement = await createValidTEESettlement(
                     ownerAddress,
                     provider1Address,
@@ -958,7 +959,7 @@ describe("Inference Serving", () => {
                 );
 
                 // Settlement 2: User1 with sufficient balance (full)
-                const user1RequestedFee = 50n;
+                const user1RequestedFee = BigInt(50);
                 const user1Settlement = await createValidTEESettlement(
                     user1Address,
                     provider1Address,
@@ -992,7 +993,7 @@ describe("Inference Serving", () => {
             it("should handle batch of 50 settlements within gas limit", async () => {
                 const batchSize = 50;
                 const settlements = [];
-                const baseNonce = BigInt(Date.now()) * 1000n; // Avoid nonce conflicts
+                const baseNonce = BigInt(Date.now()) * BigInt(1000); // Avoid nonce conflicts
                 
                 // Reuse existing users and create settlements
                 for (let i = 0; i < batchSize; i++) {
@@ -1023,18 +1024,18 @@ describe("Inference Serving", () => {
                 // Execute the batch settlement and measure actual gas
                 const tx = await serving.connect(provider1).settleFeesWithTEE(settlements);
                 const receipt = await tx.wait();
-                const actualGas = receipt.gasUsed;
+                const actualGas = receipt!.gasUsed;
                 
                 console.log(`Actual gas used: ${actualGas.toString()}`);
                 console.log(`Gas per settlement: ${(actualGas / BigInt(batchSize)).toString()}`);
-                console.log(`Gas efficiency: ${((gasEstimate - actualGas) * 100n / gasEstimate).toString()}% under estimate`);
+                console.log(`Gas efficiency: ${((gasEstimate - actualGas) * BigInt(100) / gasEstimate).toString()}% under estimate`);
                 
                 // Assert reasonable gas limits
                 expect(actualGas).to.be.below(900000); // Should be under 0.9M gas for 50 settlements
                 expect(actualGas / BigInt(batchSize)).to.be.below(30000); // Should be under 30k gas per settlement
                 
                 // Verify the batch was processed successfully
-                expect(receipt.status).to.equal(1);
+                expect(receipt!.status).to.equal(1);
                 
                 console.log(`✅ Gas test passed: ${actualGas.toString()} gas for ${batchSize} settlements\n`);
             });
