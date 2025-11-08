@@ -11,7 +11,7 @@ struct Account {
     uint pendingRefund;
     Refund[] refunds;
     string additionalInfo;
-    address teeSignerAddress; // TEE ECDSA signer address for settlement verification
+    bool acknowledged; // Whether user has acknowledged this provider
     uint validRefundsLength; // Track the number of valid (non-dirty) refunds
 }
 
@@ -197,6 +197,22 @@ library AccountLibrary {
         map._userIndex[user].remove(key);
         map._keys.remove(key);
         delete map._values[key];
+    }
+
+    function acknowledgeTEESigner(
+        AccountMap storage map,
+        address user,
+        address provider,
+        bool acknowledged
+    ) internal {
+        Account storage account = _get(map, user, provider);
+        
+        // Once acknowledged as true, can only be set back to false if balance is zero
+        if (account.acknowledged && !acknowledged) {
+            require(account.balance == 0, "Cannot revoke acknowledgement with non-zero balance");
+        }
+        
+        account.acknowledged = acknowledged;
     }
 
     function depositFund(
