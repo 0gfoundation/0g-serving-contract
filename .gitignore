@@ -4,8 +4,6 @@ node_modules
 # Hardhat files
 /build
 /artifacts
-.openzeppelin
-deployments
 
 # TypeChain files
 /typechain-types
