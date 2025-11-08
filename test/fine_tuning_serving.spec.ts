@@ -751,3 +751,156 @@ async function backfillVerifierInput(privateKey: string, v: VerifierInputStruct)
     v.signature = await wallet.signMessage(ethers.toBeArray(hash));
     return v;
 }
+
+describe("FineTuning Serving - Receive Function", () => {
+    let serving: Serving;
+    let ledger: LedgerManager;
+    let owner: HardhatEthersSigner;
+    let user1: HardhatEthersSigner;
+    let user2: HardhatEthersSigner;
+    let provider1: HardhatEthersSigner;
+    let user1Address: string;
+    let user2Address: string;
+    let ownerAddress: string;
+    let provider1Address: string;
+
+    beforeEach(async () => {
+        await deployments.fixture(["test-services"]);
+        
+        const fineTuningServingDeployment = await deployments.get("FineTuningServing_test");
+        const ledgerManagerDeployment = await deployments.get("LedgerManager");
+        
+        serving = await ethers.getContractAt("FineTuningServing", fineTuningServingDeployment.address);
+        ledger = await ethers.getContractAt("LedgerManager", ledgerManagerDeployment.address);
+        
+        [owner, user1, user2, provider1] = await ethers.getSigners();
+        [ownerAddress, user1Address, user2Address, provider1Address] = await Promise.all([
+            owner.getAddress(),
+            user1.getAddress(),
+            user2.getAddress(),
+            provider1.getAddress(),
+        ]);
+    });
+
+    describe("Receive function", () => {
+        it("should automatically forward ETH to ledger when receiving direct transfers", async () => {
+            const depositAmount = ethers.parseEther("1.5");
+            
+            // Verify account doesn't exist initially
+            await expect(ledger.getLedger(user1Address)).to.be.revertedWithCustomError(
+                ledger,
+                "LedgerNotExists"
+            );
+            
+            // Send ETH directly to FineTuningServing contract
+            const tx = await user1.sendTransaction({
+                to: await serving.getAddress(),
+                value: depositAmount
+            });
+            await tx.wait();
+            
+            // Verify funds were forwarded to ledger
+            const ledgerInfo = await ledger.getLedger(user1Address);
+            expect(ledgerInfo.availableBalance).to.equal(depositAmount);
+            expect(ledgerInfo.totalBalance).to.equal(depositAmount);
+            expect(ledgerInfo.user).to.equal(user1Address);
+        });
+
+        it("should accumulate multiple direct transfers correctly", async () => {
+            const firstAmount = ethers.parseEther("0.8");
+            const secondAmount = ethers.parseEther("1.2");
+            
+            // Send two separate transfers
+            await user2.sendTransaction({
+                to: await serving.getAddress(),
+                value: firstAmount
+            });
+            
+            await user2.sendTransaction({
+                to: await serving.getAddress(),
+                value: secondAmount
+            });
+            
+            // Check accumulated balance
+            const ledgerInfo = await ledger.getLedger(user2Address);
+            expect(ledgerInfo.availableBalance).to.equal(firstAmount + secondAmount);
+            expect(ledgerInfo.totalBalance).to.equal(firstAmount + secondAmount);
+        });
+
+        it("should correctly handle transfers from multiple users", async () => {
+            const ownerAmount = ethers.parseEther("2");
+            const user1Amount = ethers.parseEther("1");
+            const providerAmount = ethers.parseEther("0.5");
+            
+            // Send from multiple users
+            await owner.sendTransaction({
+                to: await serving.getAddress(),
+                value: ownerAmount
+            });
+            
+            await user1.sendTransaction({
+                to: await serving.getAddress(),
+                value: user1Amount
+            });
+            
+            await provider1.sendTransaction({
+                to: await serving.getAddress(),
+                value: providerAmount
+            });
+            
+            // Verify each user's balance
+            const ownerLedger = await ledger.getLedger(ownerAddress);
+            const user1Ledger = await ledger.getLedger(user1Address);
+            const providerLedger = await ledger.getLedger(provider1Address);
+            
+            expect(ownerLedger.availableBalance).to.equal(ownerAmount);
+            expect(user1Ledger.availableBalance).to.equal(user1Amount);
+            expect(providerLedger.availableBalance).to.equal(providerAmount);
+        });
+
+        it("should work alongside normal ledger operations", async () => {
+            const directTransfer = ethers.parseEther("0.3");
+            const normalDeposit = ethers.parseEther("0.7");
+            const totalExpected = directTransfer + normalDeposit;
+            
+            // First, send direct transfer to FineTuningServing
+            await user1.sendTransaction({
+                to: await serving.getAddress(),
+                value: directTransfer
+            });
+            
+            // Then, use normal deposit through ledger
+            await ledger.connect(user1).depositFund({ value: normalDeposit });
+            
+            // Verify total balance
+            const ledgerInfo = await ledger.getLedger(user1Address);
+            expect(ledgerInfo.availableBalance).to.equal(totalExpected);
+            expect(ledgerInfo.totalBalance).to.equal(totalExpected);
+        });
+
+        it("should create account for new user via direct transfer", async () => {
+            const signers = await ethers.getSigners();
+            const newUser = signers[5] || signers[signers.length - 1]; // Fallback to last signer
+            const newUserAddress = await newUser.getAddress();
+            const amount = ethers.parseEther("2");
+            
+            // Verify no account exists
+            await expect(ledger.getLedger(newUserAddress)).to.be.revertedWithCustomError(
+                ledger,
+                "LedgerNotExists"  
+            );
+            
+            // Send direct transfer
+            await newUser.sendTransaction({
+                to: await serving.getAddress(),
+                value: amount
+            });
+            
+            // Verify account was created with correct balance
+            const ledgerInfo = await ledger.getLedger(newUserAddress);
+            expect(ledgerInfo.user).to.equal(newUserAddress);
+            expect(ledgerInfo.availableBalance).to.equal(amount);
+            expect(ledgerInfo.totalBalance).to.equal(amount);
+        });
+    });
+});
