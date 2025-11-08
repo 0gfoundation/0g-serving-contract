@@ -188,7 +188,8 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         if (totalAmount == 0) {
             return (0, balance, pendingRefund);
         }
-        payable(msg.sender).transfer(totalAmount);
+        (bool success, ) = payable(msg.sender).call{value: totalAmount}("");
+        require(success, "transfer to ledger failed");
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -339,5 +340,11 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         return
             interfaceId == type(IServing).interfaceId ||
             super.supportsInterface(interfaceId);
+    }
+
+    receive() external payable {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        // Use ILedger interface to deposit funds for the sender
+        $.ledger.depositFundFor{value: msg.value}(msg.sender);
     }
 }
