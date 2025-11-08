@@ -287,6 +287,11 @@ npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing 
 # Execute upgrade
 npx hardhat upgrade --name InferenceServing_v1.0 --artifact InferenceServing --execute true --network zgTestnetV4
 
+IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+
 # Re-import upgraded contracts
 npx hardhat upgrade:forceImportAll --network zgTestnetV4
 
@@ -334,6 +339,12 @@ npx hardhat upgrade:validate --old LedgerManager --new LedgerManager --network z
 
 # Execute upgrade
 npx hardhat upgrade --name LedgerManager --artifact LedgerManager --execute true --network zgTestnetV4
+
+# Verify contract
+IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
 
 # Commit upgrade to main branch
 git add deployments/zgTestnetV4/LedgerManager*.json .openzeppelin/
