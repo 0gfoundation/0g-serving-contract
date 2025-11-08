@@ -533,4 +533,148 @@ describe("Ledger manager", () => {
             ).to.be.reverted;
         });
     });
+
+    describe("Receive function", () => {
+        it("should automatically deposit funds when receiving ETH via transfer", async () => {
+            const depositAmount = 1000;  // Use wei like other tests in this file
+            
+            // Get initial balance (user1 already has an account from beforeEach)
+            const initialLedger = await ledger.getLedger(user1Address);
+            const initialBalance = initialLedger.availableBalance;
+            
+            // Send ETH directly to the contract
+            const ledgerAddress = await ledger.getAddress();
+            const tx = await user1.sendTransaction({
+                to: ledgerAddress,
+                value: depositAmount
+            });
+            const receipt = await tx.wait();
+            expect(receipt?.status).to.equal(1);  // Ensure transaction succeeded
+            
+            // Check that the funds were added to existing balance
+            const ledgerInfo = await ledger.getLedger(user1Address);
+            expect(ledgerInfo.availableBalance).to.equal(initialBalance + BigInt(depositAmount));
+            expect(ledgerInfo.totalBalance).to.equal(initialBalance + BigInt(depositAmount));
+        });
+
+        it("should create a new account if it doesn't exist when receiving ETH", async () => {
+            const depositAmount = 500;  // Use wei
+            const signers = await ethers.getSigners();
+            const newUser = signers[3]; // Get a new signer (avoid index 5 which may not exist)
+            const newUserAddress = await newUser.getAddress();
+            
+            // Verify account doesn't exist
+            await expect(ledger.getLedger(newUserAddress)).to.be.revertedWithCustomError(
+                ledger,
+                "LedgerNotExists"
+            );
+            
+            // Send ETH directly to the contract
+            const tx = await newUser.sendTransaction({
+                to: await ledger.getAddress(),
+                value: depositAmount
+            });
+            await tx.wait();
+            
+            // Check that account was created with correct balance
+            const ledgerInfo = await ledger.getLedger(newUserAddress);
+            expect(ledgerInfo.availableBalance).to.equal(BigInt(depositAmount));
+            expect(ledgerInfo.totalBalance).to.equal(BigInt(depositAmount));
+            expect(ledgerInfo.user).to.equal(newUserAddress);
+        });
+
+        it("should add to existing balance when receiving multiple ETH transfers", async () => {
+            const firstDeposit = 500;  // Use wei
+            const secondDeposit = 300;  // Use wei
+            
+            // Get initial balance  
+            const initialLedger = await ledger.getLedger(user1Address);
+            const initialBalance = initialLedger.availableBalance;
+            
+            // First transfer
+            await user1.sendTransaction({
+                to: await ledger.getAddress(),
+                value: firstDeposit
+            });
+            
+            // Second transfer
+            await user1.sendTransaction({
+                to: await ledger.getAddress(),
+                value: secondDeposit
+            });
+            
+            // Check total balance
+            const ledgerInfo = await ledger.getLedger(user1Address);
+            expect(ledgerInfo.availableBalance).to.equal(initialBalance + BigInt(firstDeposit) + BigInt(secondDeposit));
+            expect(ledgerInfo.totalBalance).to.equal(initialBalance + BigInt(firstDeposit) + BigInt(secondDeposit));
+        });
+
+        it("should handle concurrent transfers from different users", async () => {
+            const amount1 = 1000;  // Use wei
+            const amount2 = 2000;  // Use wei
+            
+            // Get initial balance for owner (who already has account)
+            const initialOwnerLedger = await ledger.getLedger(ownerAddress);
+            const initialOwnerBalance = initialOwnerLedger.availableBalance;
+            
+            // Send from two different users (owner has account, provider1 doesn't)
+            await Promise.all([
+                owner.sendTransaction({
+                    to: await ledger.getAddress(),
+                    value: amount1
+                }),
+                provider1.sendTransaction({
+                    to: await ledger.getAddress(),
+                    value: amount2
+                })
+            ]);
+            
+            // Check both balances
+            const ownerLedger = await ledger.getLedger(ownerAddress);
+            const providerLedger = await ledger.getLedger(provider1Address);
+            
+            expect(ownerLedger.availableBalance).to.equal(initialOwnerBalance + BigInt(amount1));
+            expect(providerLedger.availableBalance).to.equal(BigInt(amount2));
+        });
+
+        it("should not interfere with normal business transfer flows", async () => {
+            // This test verifies that receive() doesn't interfere with normal transferFund -> processRefund flows
+            
+            // Step 1: Transfer funds to FineTuning service (normal business flow)
+            const transferAmount = 500; // wei like other tests
+            await ledger.transferFund(provider1Address, "fine-tuning-test", transferAmount);
+            
+            // Get initial state
+            const initialOwnerLedger = await ledger.getLedger(ownerAddress);
+            const initialAvailableBalance = initialOwnerLedger.availableBalance;
+            
+            console.log("Before retrieveFund - Owner available balance:", initialAvailableBalance.toString());
+            
+            // Step 2: Set up refund and wait for unlock time  
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+            await ethers.provider.send("evm_increaseTime", [86401]); // 24+ hours
+            await ethers.provider.send("evm_mine");
+            
+            // Step 3: Retrieve funds (this triggers FineTuning -> LedgerManager ETH transfer)
+            await ledger.retrieveFund([provider1Address], "fine-tuning-test");
+            
+            // Step 4: Verify balance increased correctly (without double-counting from receive)
+            const finalOwnerLedger = await ledger.getLedger(ownerAddress);
+            const finalAvailableBalance = finalOwnerLedger.availableBalance;
+            const balanceIncrease = finalAvailableBalance - initialAvailableBalance;
+            
+            console.log("After retrieveFund - Owner available balance:", finalAvailableBalance.toString());
+            console.log("Balance increase:", balanceIncrease.toString());
+            console.log("Expected increase:", transferAmount.toString());
+            
+            // The balance should increase by exactly the transfer amount, not double
+            // If receive() incorrectly processed the business transfer, it would be 2x
+            expect(balanceIncrease).to.equal(BigInt(transferAmount), 
+                "Balance should increase by transfer amount only, receive() should not double-count business transfers");
+            
+            // Verify the increase is exactly what we expect (not 0, not 2x)
+            expect(balanceIncrease).to.not.equal(BigInt(0), "Balance should have increased");
+            expect(balanceIncrease).to.not.equal(BigInt(transferAmount * 2), "Balance should not be double-counted by receive()");
+        });
+    });
 });

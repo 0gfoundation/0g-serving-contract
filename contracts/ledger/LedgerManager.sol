@@ -39,6 +39,7 @@ struct ServiceInfo {
 
 interface ILedger {
     function spendFund(address user, uint amount) external;
+    function depositFundFor(address recipient) external payable;
 }
 
 
@@ -170,16 +171,21 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function depositFund() external payable withLedgerLock(msg.sender) {
+        _depositFundInternal(msg.sender, msg.value);
+    }
+    
+    // Internal function for deposit logic without modifier
+    function _depositFundInternal(address user, uint256 amount) internal {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
-        bytes32 key = _key(msg.sender);
+        bytes32 key = _key(user);
         
         // Create account if it doesn't exist
         if (!_contains($, key)) {
-            _set($, key, msg.sender, msg.value, "");
+            _set($, key, user, amount, "");
         } else {
-            Ledger storage ledger = _get($, msg.sender);
-            ledger.availableBalance += msg.value;
-            ledger.totalBalance += msg.value;
+            Ledger storage ledger = $.ledgerMap._values[key];
+            ledger.availableBalance += amount;
+            ledger.totalBalance += amount;
         }
     }
 
@@ -191,7 +197,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         if (!_contains($, key)) {
             _set($, key, recipient, msg.value, "");
         } else {
-            Ledger storage ledger = _get($, recipient);
+            Ledger storage ledger = $.ledgerMap._values[key];
             ledger.availableBalance += msg.value;
             ledger.totalBalance += msg.value;
         }
@@ -549,5 +555,27 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         return keccak256(abi.encode(user));
     }
 
-    receive() external payable {}
+    receive() external payable {
+        if (_isServiceContract(msg.sender)) {
+            return;
+        }
+        
+        LedgerManagerStorage storage $ = _getLedgerManagerStorage();
+        bytes32 key = _key(tx.origin);
+        
+        // Check and set lock
+        require(!$.ledgerMap._operationLocks[key], "Ledger locked for operation");
+        $.ledgerMap._operationLocks[key] = true;
+        
+        // Deposit funds using internal function  
+        _depositFundInternal(tx.origin, msg.value);
+        
+        // Release lock
+        $.ledgerMap._operationLocks[key] = false;
+    }
+
+    function _isServiceContract(address sender) internal view returns (bool) {
+        LedgerManagerStorage storage $ = _getLedgerManagerStorage();
+        return $.registeredServices[sender].serviceAddress != address(0);
+    }
 }

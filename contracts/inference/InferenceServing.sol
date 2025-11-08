@@ -203,7 +203,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         (totalAmount, balance, pendingRefund) = $.accountMap.processRefund(user, provider, $.lockTime);
 
         if (totalAmount > 0) {
-            payable(msg.sender).transfer(totalAmount);
+            (bool success, ) = payable(msg.sender).call{value: totalAmount}("");
+            require(success, "transfer to ledger failed");
             emit BalanceUpdated(user, provider, balance, pendingRefund);
         }
     }
@@ -505,4 +506,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             super.supportsInterface(interfaceId);
     }
 
+    receive() external payable {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        // Use ILedger interface to deposit funds for the sender
+        $.ledger.depositFundFor{value: msg.value}(msg.sender);
+    }
 }
