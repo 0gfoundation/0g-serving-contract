@@ -3,7 +3,7 @@
   "proxies": [],
   "impls": {
     "21a570f79415c1d46ffb90d7ca5ad5783e0081829b45835fea859bb67d576b1b": {
-      "address": "0x73665Bd6335b46656ADe94Ad1D12A2586ADE74d8",
+      "address": "0x9fc283881ca3a235a270ce13df697b9849c958cc",
       "layout": {
         "solcVersion": "0.8.20",
         "storage": [
@@ -50,7 +50,7 @@
       }
     },
     "dc6c25b886a351a2a0f62c9e34b2a130f12a48eb77b3e9b8c7fbc23c90bc1a89": {
-      "address": "0x5D5EA4e2c884CBaA04E8f5ba6986f559d499DC0d",
+      "address": "0xB11eE9Cfe12d2DD93eCC7f6eB8e243A5fb4a2ADF",
       "layout": {
         "solcVersion": "0.8.20",
         "storage": [
