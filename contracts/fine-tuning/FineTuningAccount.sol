@@ -70,6 +70,7 @@ library AccountLibrary {
     // Constants for optimization
     uint constant MAX_REFUNDS_PER_ACCOUNT = 30;
     uint constant REFUND_CLEANUP_THRESHOLD = 15;
+    uint constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
 
     error AccountNotExists(address user, address provider);
     error AccountExists(address user, address provider);
@@ -78,6 +79,7 @@ library AccountLibrary {
     error RefundProcessed(address user, address provider, uint index);
     error RefundLocked(address user, address provider, uint index);
     error TooManyRefunds(address user, address provider);
+    error AdditionalInfoTooLong();
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -281,6 +283,9 @@ library AccountLibrary {
         uint amount,
         string memory additionalInfo
     ) internal returns (uint, uint) {
+        if (bytes(additionalInfo).length > MAX_ADDITIONAL_INFO_LENGTH) {
+            revert AdditionalInfoTooLong();
+        }
         bytes32 key = _key(user, provider);
         if (_contains(map, key)) {
             revert AccountExists(user, provider);

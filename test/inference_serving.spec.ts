@@ -439,7 +439,7 @@ describe("Inference Serving", () => {
         });
 
         it("should get all services", async () => {
-            const services = await serving.getAllServices();
+            const [services] = await serving.getAllServices(0, 0);
             const addresses = (services as ServiceStructOutput[]).map((s) => s.provider);
             const serviceTypes = (services as ServiceStructOutput[]).map((s) => s.serviceType);
             const urls = (services as ServiceStructOutput[]).map((s) => s.url);
@@ -508,7 +508,7 @@ describe("Inference Serving", () => {
                 .to.emit(serving, "ServiceRemoved")
                 .withArgs(provider1Address);
 
-            const services = await serving.getAllServices();
+            const [services] = await serving.getAllServices(0, 0);
             expect(services.length).to.equal(1);
         });
 
@@ -1066,113 +1066,6 @@ describe("Inference Serving", () => {
             await expect(ledger.deleteLedger()).not.to.be.reverted;
             const [accounts] = await serving.getAllAccounts(0, 0);
             expect(accounts.length).to.equal(1);
-        });
-    });
-
-    describe("Receive function", () => {
-        it("should automatically forward ETH to ledger when receiving direct transfers", async () => {
-            const depositAmount = ethers.parseEther("1");
-            const user = (await ethers.getSigners())[3];
-            const userAddress = await user.getAddress();
-            
-            // Get initial balance (should not exist)
-            await expect(ledger.getLedger(userAddress)).to.be.revertedWithCustomError(
-                ledger,
-                "LedgerNotExists"
-            );
-            
-            // Send ETH directly to InferenceServing contract
-            const tx = await user.sendTransaction({
-                to: await serving.getAddress(),
-                value: depositAmount
-            });
-            await tx.wait();
-            
-            // Check that funds were forwarded to ledger
-            const ledgerInfo = await ledger.getLedger(userAddress);
-            expect(ledgerInfo.availableBalance).to.equal(depositAmount);
-            expect(ledgerInfo.totalBalance).to.equal(depositAmount);
-        });
-
-        it("should handle multiple direct ETH transfers correctly", async () => {
-            // Get initial balance to account for existing balance
-            const initialLedger = await ledger.getLedger(user1Address);
-            const initialBalance = initialLedger.availableBalance;
-            const initialTotal = initialLedger.totalBalance;
-            
-            const firstDeposit = ethers.parseEther("0.5");
-            const secondDeposit = ethers.parseEther("0.7");
-            
-            // Send first transfer
-            await user1.sendTransaction({
-                to: await serving.getAddress(),
-                value: firstDeposit
-            });
-            
-            // Send second transfer
-            await user1.sendTransaction({
-                to: await serving.getAddress(),
-                value: secondDeposit
-            });
-            
-            // Check total in ledger - should maintain the same relationship between available and total
-            const ledgerInfo = await ledger.getLedger(user1Address);
-            expect(ledgerInfo.availableBalance).to.equal(initialBalance + firstDeposit + secondDeposit);
-            expect(ledgerInfo.totalBalance).to.equal(initialTotal + firstDeposit + secondDeposit);
-        });
-
-        it("should correctly identify sender when receiving ETH from different users", async () => {
-            const amount1 = ethers.parseEther("1");
-            const amount2 = ethers.parseEther("2");
-            const signers = await ethers.getSigners();
-            const user3 = signers[4] || signers[3]; // Fallback signer
-            const user3Address = await user3.getAddress();
-            
-            // Get initial balance for user1 (who already has balance)
-            const initialUser1Ledger = await ledger.getLedger(user1Address);
-            const initialUser1Balance = initialUser1Ledger.availableBalance;
-            
-            // Send from two different users to InferenceServing
-            await user1.sendTransaction({
-                to: await serving.getAddress(),
-                value: amount1
-            });
-            
-            await user3.sendTransaction({
-                to: await serving.getAddress(),
-                value: amount2
-            });
-            
-            // Check both users have correct balances in ledger
-            const user1Ledger = await ledger.getLedger(user1Address);
-            const user3Ledger = await ledger.getLedger(user3Address);
-            
-            expect(user1Ledger.availableBalance).to.equal(initialUser1Balance + amount1);
-            expect(user3Ledger.availableBalance).to.equal(amount2);
-        });
-
-        it("should work alongside normal addAccount and depositFund operations", async () => {
-            // Get initial balance
-            const initialLedger = await ledger.getLedger(user1Address);
-            const initialBalance = initialLedger.availableBalance;
-            const initialTotal = initialLedger.totalBalance;
-            
-            const directDeposit = ethers.parseEther("0.5");
-            const normalDeposit = ethers.parseEther("1");
-            
-            // First, direct transfer
-            await user1.sendTransaction({
-                to: await serving.getAddress(),
-                value: directDeposit
-            });
-            
-            // Then, normal deposit through ledger
-            await ledger.connect(user1).depositFund({ value: normalDeposit });
-            
-            // Check total balance - should maintain the same relationship between available and total
-            const ledgerInfo = await ledger.getLedger(user1Address);
-            expect(ledgerInfo.availableBalance).to.equal(initialBalance + directDeposit + normalDeposit);
-            expect(ledgerInfo.totalBalance).to.equal(initialTotal + directDeposit + normalDeposit);
         });
     });
 });

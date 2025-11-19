@@ -31,7 +31,10 @@ struct Service {
 library ServiceLibrary {
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
+    uint constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
+
     error ServiceNotExist(address provider);
+    error AdditionalInfoTooLong();
 
     struct ServiceMap {
         EnumerableSet.Bytes32Set _keys;
@@ -42,15 +45,34 @@ library ServiceLibrary {
         return _get(map, provider);
     }
 
-    function getAllServices(ServiceMap storage map) internal view returns (Service[] memory services) {
-        uint len = _length(map);
-        services = new Service[](len);
-        for (uint i = 0; i < len; ++i) {
-            services[i] = _at(map, i);
+    function getAllServices(
+        ServiceMap storage map,
+        uint offset,
+        uint limit
+    ) internal view returns (Service[] memory services, uint total) {
+        total = _length(map);
+
+        if (offset >= total) {
+            return (new Service[](0), total);
+        }
+
+        uint end = offset + limit;
+        if (limit == 0 || end > total) {
+            end = total;
+        }
+
+        uint resultLength = end - offset;
+        services = new Service[](resultLength);
+
+        for (uint i = 0; i < resultLength; i++) {
+            services[i] = _at(map, offset + i);
         }
     }
 
     function addOrUpdateService(ServiceMap storage map, address provider, ServiceParams calldata params) internal {
+        if (bytes(params.additionalInfo).length > MAX_ADDITIONAL_INFO_LENGTH) {
+            revert AdditionalInfoTooLong();
+        }
         bytes32 key = _key(provider);
         if (!_contains(map, key)) {
             _set(
