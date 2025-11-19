@@ -49,6 +49,53 @@
         "namespaces": {}
       }
     },
+    "d1acd6a9a238d0aff49805d2c2018f5621acacc312332717d6a0b79d1b31966a": {
+      "address": "0xCe4348aCc35f2E25902410fAB043B846ab68B1c5",
+      "layout": {
+        "solcVersion": "0.8.20",
+        "storage": [
+          {
+            "label": "_owner",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_address",
+            "contract": "Ownable",
+            "src": "@openzeppelin/contracts/access/Ownable.sol:21"
+          },
+          {
+            "label": "initialized",
+            "offset": 20,
+            "slot": "0",
+            "type": "t_bool",
+            "contract": "Initializable",
+            "src": "contracts/utils/Initializable.sol:5"
+          },
+          {
+            "label": "_status",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_uint256",
+            "contract": "ReentrancyGuard",
+            "src": "@openzeppelin/contracts/security/ReentrancyGuard.sol:37"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_uint256": {
+            "label": "uint256",
+            "numberOfBytes": "32"
+          }
+        },
+        "namespaces": {}
+      }
+    },
     "dc6c25b886a351a2a0f62c9e34b2a130f12a48eb77b3e9b8c7fbc23c90bc1a89": {
       "address": "0x3af6b57556012bB5513aD017942a15B0f119170f",
       "layout": {
