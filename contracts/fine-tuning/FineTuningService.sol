@@ -55,7 +55,7 @@ library ServiceLibrary {
     ) internal {
         bytes32 key = _key(provider);
         if (!_contains(map, key)) {
-            _set(map, key, Service(provider, url, quota, pricePerToken, providerSigner, false, models));
+            _set(map, key, Service(provider, url, quota, pricePerToken, providerSigner, occupied, models));
             return;
         }
         Service storage value = _get(map, provider);

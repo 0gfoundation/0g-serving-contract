@@ -43,6 +43,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.inference.v1.0")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant INFERENCE_SERVING_STORAGE_LOCATION = 0xdfd123095cdedb1cecbc229b30f7cf8745fb3d3951645ac4a8fa4c0895f89500;
+    
+    // Enforce sane lockTime to avoid instant bypass (0) or excessive freeze (> 7 days)
+    uint public constant MIN_LOCKTIME = 1 hours;
+    uint public constant MAX_LOCKTIME = 7 days;
 
     function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
         assembly {
@@ -83,6 +87,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         _transferOwnership(owner);
+        require(
+            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
+            "lockTime out of range"
+        );
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
@@ -96,6 +104,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function updateLockTime(uint _locktime) public onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
+        require(
+            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
+            "lockTime out of range"
+        );
         $.lockTime = _locktime;
     }
 
@@ -107,7 +119,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function getAllAccounts(uint offset, uint limit) public view returns (Account[] memory accounts, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAllAccounts(offset, limit);
+        return $.accountMap.getAllAccounts(offset, (limit == 0 ? 50 : limit));
     }
 
     function getAccountsByProvider(
@@ -117,7 +129,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ) public view returns (Account[] memory accounts, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAccountsByProvider(provider, offset, limit);
+        return $.accountMap.getAccountsByProvider(provider, offset, (limit == 0 ? 50 : limit));
     }
 
     function getAccountsByUser(
@@ -127,7 +139,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ) public view returns (Account[] memory accounts, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAccountsByUser(user, offset, limit);
+        return $.accountMap.getAccountsByUser(user, offset, (limit == 0 ? 50 : limit));
     }
 
     function getBatchAccountsByUsers(address[] calldata users) external view returns (Account[] memory accounts) {
@@ -214,9 +226,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         service = $.serviceMap.getService(provider);
     }
 
-    function getAllServices() public view returns (Service[] memory services) {
+    function getAllServices(uint offset, uint limit) public view returns (Service[] memory services, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        services = $.serviceMap.getAllServices();
+        require(limit == 0 || limit <= 50, "Limit too large");
+        return $.serviceMap.getAllServices(offset, (limit == 0 ? 50 : limit));
     }
 
     function addOrUpdateService(ServiceParams calldata params) external {
@@ -253,6 +266,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
                 if (refund.amount <= remainingFee) {
                     remainingFee -= refund.amount;
+                    refund.amount = 0;           // Clear consumed amount
+                    refund.processed = true;     // Mark as processed to prevent double-counting
                 } else {
                     refund.amount -= remainingFee;
                     remainingFee = 0;
@@ -507,8 +522,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     receive() external payable {
-        InferenceServingStorage storage $ = _getInferenceServingStorage();
-        // Use ILedger interface to deposit funds for the sender
-        $.ledger.depositFundFor{value: msg.value}(msg.sender);
+        revert("Direct deposits disabled; use LedgerManager");
     }
 }

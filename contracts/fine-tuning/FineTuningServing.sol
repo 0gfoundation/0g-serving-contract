@@ -38,6 +38,10 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.finetuning.v1.0")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant FINETUNING_SERVING_STORAGE_LOCATION = 0x5dcaaa00d1d3fae8cd5d66aceca789aec54970049ac35cb62a7adefca50a6800;
+    
+    // Enforce sane lockTime to avoid instant bypass (0) or excessive freeze (> 7 days)
+    uint public constant MIN_LOCKTIME = 1 hours;
+    uint public constant MAX_LOCKTIME = 7 days;
 
     function _getFineTuningServingStorage() private pure returns (FineTuningServingStorage storage $) {
         assembly {
@@ -81,7 +85,17 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint _penaltyPercentage
     ) public onlyInitializeOnce {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        require(
+            _ledgerAddress != address(0) && _ledgerAddress.code.length > 0,
+            "Invalid ledger address"
+        );
+        require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
+        require(_locktime <= 365 days, "lockTime too large");        
         _transferOwnership(owner);
+        require(
+            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
+            "lockTime out of range"
+        );
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
@@ -96,11 +110,17 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     function updateLockTime(uint _locktime) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        require(_locktime <= 365 days, "lockTime too large");
+        require(
+            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
+            "lockTime out of range"
+        );
         $.lockTime = _locktime;
     }
 
     function updatePenaltyPercentage(uint _penaltyPercentage) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
         $.penaltyPercentage = _penaltyPercentage;
     }
 
@@ -117,7 +137,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAllAccounts(offset, limit);
+        return $.accountMap.getAllAccounts(offset, (limit == 0 ? 50 : limit));
     }
 
     function getAccountsByProvider(
@@ -127,7 +147,11 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAccountsByProvider(provider, offset, limit);
+        return $.accountMap.getAccountsByProvider(
+            provider,
+            offset,
+            (limit == 0 ? 50 : limit)
+        );
     }
 
     function getAccountsByUser(
@@ -137,7 +161,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAccountsByUser(user, offset, limit);
+        return $.accountMap.getAccountsByUser(user, offset, (limit == 0 ? 50 : limit));
     }
 
     function getBatchAccountsByUsers(
@@ -343,8 +367,6 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     receive() external payable {
-        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        // Use ILedger interface to deposit funds for the sender
-        $.ledger.depositFundFor{value: msg.value}(msg.sender);
+        revert("Direct deposits disabled; use LedgerManager");
     }
 }
