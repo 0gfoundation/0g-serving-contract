@@ -26,8 +26,8 @@ library AccountLibrary {
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
     // Constants for optimization
-    uint constant MAX_REFUNDS_PER_ACCOUNT = 30;
-    uint constant REFUND_CLEANUP_THRESHOLD = 15;
+    uint constant MAX_REFUNDS_PER_ACCOUNT = 5;
+    uint constant REFUND_CLEANUP_THRESHOLD = 3;
 
     error AccountNotExists(address user, address provider);
     error AccountExists(address user, address provider);
