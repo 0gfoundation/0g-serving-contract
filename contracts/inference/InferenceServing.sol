@@ -39,6 +39,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         ILedger ledger;
         AccountLibrary.AccountMap accountMap;
         ServiceLibrary.ServiceMap serviceMap;
+        mapping(address => uint) providerStake; // Service provider stake amounts
     }
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.inference.v1.0")) - 1)) & ~bytes32(uint256(0xff))
@@ -47,6 +48,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     // Enforce sane lockTime to avoid instant bypass (0) or excessive freeze (> 7 days)
     uint public constant MIN_LOCKTIME = 1 hours;
     uint public constant MAX_LOCKTIME = 7 days;
+
+    // Service provider stake requirement
+    uint public constant MIN_PROVIDER_STAKE = 10 ether; // 10 0G minimum stake
 
     function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
         assembly {
@@ -81,8 +85,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event TEESettlementResult(address indexed user, SettlementStatus status, uint256 unsettledAmount);
     event BatchBalanceUpdated(address[] users, uint256[] balances, uint256[] pendingRefunds);
     event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
+    event ProviderStaked(address indexed provider, uint amount);
+    event ProviderStakeReturned(address indexed provider, uint amount);
     error InvalidTEESignature(string reason);
-
 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
@@ -184,6 +189,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ) external payable onlyLedger {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
+
+        // Auto-acknowledge TEE signer when user transfers funds to provider
+        $.accountMap.acknowledgeTEESigner(user, provider, true);
+
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -195,6 +204,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
+
+        // Auto-acknowledge TEE signer when user deposits funds to provider (if not already acknowledged)
+        Account storage account = $.accountMap.getAccount(user, provider);
+        if (!account.acknowledged) {
+            $.accountMap.acknowledgeTEESigner(user, provider, true);
+        }
+
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -232,8 +248,19 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.serviceMap.getAllServices(offset, (limit == 0 ? 50 : limit));
     }
 
-    function addOrUpdateService(ServiceParams calldata params) external {
+    function addOrUpdateService(ServiceParams calldata params) external payable {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
+        if ($.providerStake[msg.sender] > 0) {
+            // Updating existing service: cannot add more stake
+            require(msg.value == 0, "Cannot add more stake when updating service");
+        } else {
+            // First time registration: require stake
+            require(msg.value >= MIN_PROVIDER_STAKE, "Minimum stake of 10 0G required");
+            $.providerStake[msg.sender] = msg.value;
+
+            emit ProviderStaked(msg.sender, msg.value);
+        }
+
         $.serviceMap.addOrUpdateService(msg.sender, params);
         emit ServiceUpdated(
             msg.sender,
@@ -247,9 +274,21 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         );
     }
 
-    function removeService() external {
+    function removeService() external nonReentrant {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         $.serviceMap.removeService(msg.sender);
+
+        // Return stake if any
+        uint stake = $.providerStake[msg.sender];
+        if (stake > 0) {
+            $.providerStake[msg.sender] = 0;
+
+            (bool success, ) = payable(msg.sender).call{value: stake}("");
+            require(success, "Stake return failed");
+
+            emit ProviderStakeReturned(msg.sender, stake);
+        }
+
         emit ServiceRemoved(msg.sender);
     }
 
