@@ -1,0 +1,6 @@
+{
+  "service": "inference",
+  "version": "v1.0",
+  "compatibleClientSDKs": ["v0.6.0"],
+  "compatibleServingImages": ["ghcr.io/0gfoundation/0g-serving-broker@sha256:36eb3705364488fb0bb010f0eed47b510f57b9897212bb03707b16288ead99f6"]
+}

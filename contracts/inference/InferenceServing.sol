@@ -50,7 +50,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     uint public constant MAX_LOCKTIME = 7 days;
 
     // Service provider stake requirement
-    uint public constant MIN_PROVIDER_STAKE = 10 ether; // 10 0G minimum stake
+    uint public constant MIN_PROVIDER_STAKE = 1 ether; // 1 0G minimum stake
 
     function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
         assembly {
