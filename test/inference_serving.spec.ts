@@ -94,7 +94,7 @@ describe("Inference Serving", () => {
                 outputPrice: provider1OutputPrice,
                 additionalInfo: "",
                 teeSignerAddress: teeSignerAddress,
-            }, { value: ethers.parseEther("10") }),
+            }, { value: ethers.parseEther("100") }),
             serving.connect(provider2).addOrUpdateService({
                 serviceType: provider2ServiceType,
                 url: provider2Url,
@@ -104,7 +104,7 @@ describe("Inference Serving", () => {
                 outputPrice: provider2OutputPrice,
                 additionalInfo: "",
                 teeSignerAddress: user1Address,
-            }, { value: ethers.parseEther("10") }),
+            }, { value: ethers.parseEther("100") }),
         ]);
     });
 
