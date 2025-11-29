@@ -50,7 +50,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     uint public constant MAX_LOCKTIME = 7 days;
 
     // Service provider stake requirement
-    uint public constant MIN_PROVIDER_STAKE = 1 ether; // 1 0G minimum stake
+    uint public constant MIN_PROVIDER_STAKE = 100 ether; // 100 0G minimum stake
 
     function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
         assembly {
@@ -255,7 +255,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             require(msg.value == 0, "Cannot add more stake when updating service");
         } else {
             // First time registration: require stake
-            require(msg.value >= MIN_PROVIDER_STAKE, "Minimum stake of 10 0G required");
+            require(msg.value >= MIN_PROVIDER_STAKE, "Minimum stake of 100 0G required");
             $.providerStake[msg.sender] = msg.value;
 
             emit ProviderStaked(msg.sender, msg.value);
