@@ -87,6 +87,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
     event ProviderStaked(address indexed provider, uint amount);
     event ProviderStakeReturned(address indexed provider, uint amount);
+    // Session token revocation events
+    event TokenRevoked(address indexed user, address indexed provider, uint8 tokenId);
+    event TokensRevoked(address indexed user, address indexed provider, uint8[] tokenIds);
+    event AllTokensRevoked(address indexed user, address indexed provider, uint newGeneration);
     error InvalidTEESignature(string reason);
 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
@@ -171,6 +175,30 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         $.serviceMap.revokeTEESignerAcknowledgement(provider);
         emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, false);
     }
+
+    function revokeToken(address provider, uint8 tokenId) external {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.revokeToken(msg.sender, provider, tokenId);
+        emit TokenRevoked(msg.sender, provider, tokenId);
+    }
+
+    function revokeTokens(address provider, uint8[] calldata tokenIds) external {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        $.accountMap.revokeTokens(msg.sender, provider, tokenIds);
+        emit TokensRevoked(msg.sender, provider, tokenIds);
+    }
+
+    function revokeAllTokens(address provider) external {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        uint newGeneration = $.accountMap.revokeAllTokens(msg.sender, provider);
+        emit AllTokensRevoked(msg.sender, provider, newGeneration);
+    }
+
+    function isTokenRevoked(address user, address provider, uint8 tokenId) external view returns (bool) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.accountMap.isTokenRevoked(user, provider, tokenId);
+    }
+
 
     function accountExists(address user, address provider) public view returns (bool) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();

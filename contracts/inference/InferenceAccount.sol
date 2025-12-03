@@ -13,6 +13,8 @@ struct Account {
     string additionalInfo;
     bool acknowledged; // Whether user has acknowledged this provider
     uint validRefundsLength; // Track the number of valid (non-dirty) refunds
+    uint generation; // Token generation for batch revocation
+    uint256 revokedBitmap; // Bitmap for precise token revocation (each bit represents a tokenId 0-255)
 }
 
 struct Refund {
@@ -206,13 +208,56 @@ library AccountLibrary {
         bool acknowledged
     ) internal {
         Account storage account = _get(map, user, provider);
-        
+
         // Once acknowledged as true, can only be set back to false if balance is zero
         if (account.acknowledged && !acknowledged) {
             require(account.balance == 0, "Cannot revoke acknowledgement with non-zero balance");
         }
-        
+
         account.acknowledged = acknowledged;
+    }
+
+    function revokeToken(
+        AccountMap storage map,
+        address user,
+        address provider,
+        uint8 tokenId
+    ) internal {
+        Account storage account = _get(map, user, provider);
+        account.revokedBitmap |= (uint256(1) << tokenId);
+    }
+
+    function revokeTokens(
+        AccountMap storage map,
+        address user,
+        address provider,
+        uint8[] calldata tokenIds
+    ) internal {
+        Account storage account = _get(map, user, provider);
+        for (uint i = 0; i < tokenIds.length; i++) {
+            account.revokedBitmap |= (uint256(1) << tokenIds[i]);
+        }
+    }
+
+    function revokeAllTokens(
+        AccountMap storage map,
+        address user,
+        address provider
+    ) internal returns (uint newGeneration) {
+        Account storage account = _get(map, user, provider);
+        account.generation++;
+        account.revokedBitmap = 0; // Reset bitmap for new generation
+        return account.generation;
+    }
+
+    function isTokenRevoked(
+        AccountMap storage map,
+        address user,
+        address provider,
+        uint8 tokenId
+    ) internal view returns (bool) {
+        Account storage account = _get(map, user, provider);
+        return (account.revokedBitmap & (uint256(1) << tokenId)) != 0;
     }
 
     function depositFund(
