@@ -49,8 +49,8 @@
         "namespaces": {}
       }
     },
-    "cf4d1ff0a22cfd8e9cafbb42761741dd3d2eea272bee87da1daed0f0ad3cf846": {
-      "address": "0xEd937BdbB446e4cf5B1E52f520b44b2441DAa299",
+    "f55dcf66c70d5908126b36f91e57c40e47d2c240cdd5747dd3b425a474858662": {
+      "address": "0x010c54C9486c3bE0b22bB16F3d32d4f73409444a",
       "layout": {
         "solcVersion": "0.8.20",
         "storage": [
