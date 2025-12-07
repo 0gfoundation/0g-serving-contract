@@ -19,9 +19,9 @@ The contract have four files:
 
 ## Documentation
 
-If you're interested in becoming a **Service Provider**, please refer to [0G Compute Network Provider Guide](https://docs.0g.ai/build-with-0g/compute-network/provider) for detailed guidelines and requirements.
+If you're interested in becoming a **Service Provider**, please refer to [0G Compute Network Provider Guide](https://docs.0g.ai/developer-hub/building-on-0g/compute-network/inference-provider) for detailed guidelines and requirements.
 
-If you wish to leverage provider services to develop your own projects, relevant resources are available in [0G Compute Network SDK Guide](https://docs.0g.ai/build-with-0g/compute-network/sdk).
+If you wish to leverage provider services to develop your own projects, relevant resources are available in [0G Compute Network SDK Guide](https://docs.0g.ai/developer-hub/building-on-0g/compute-network/sdk).
 
 ## Support and Additional Resources
 
