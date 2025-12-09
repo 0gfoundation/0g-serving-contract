@@ -113,7 +113,7 @@ const config: HardhatUserConfig = {
     },
     gasReporter: {
         currency: "Gwei",
-        gasPrice: 12, // 匹配 0G 测试网价格
+        gasPrice: 12,
         enabled: true,
         outputFile: "gas-report.txt",
         noColors: true,

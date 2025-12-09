@@ -201,12 +201,7 @@ library AccountLibrary {
         delete map._values[key];
     }
 
-    function acknowledgeTEESigner(
-        AccountMap storage map,
-        address user,
-        address provider,
-        bool acknowledged
-    ) internal {
+    function acknowledgeTEESigner(AccountMap storage map, address user, address provider, bool acknowledged) internal {
         Account storage account = _get(map, user, provider);
 
         // Once acknowledged as true, can only be set back to false if balance is zero
@@ -217,22 +212,12 @@ library AccountLibrary {
         account.acknowledged = acknowledged;
     }
 
-    function revokeToken(
-        AccountMap storage map,
-        address user,
-        address provider,
-        uint8 tokenId
-    ) internal {
+    function revokeToken(AccountMap storage map, address user, address provider, uint8 tokenId) internal {
         Account storage account = _get(map, user, provider);
         account.revokedBitmap |= (uint256(1) << tokenId);
     }
 
-    function revokeTokens(
-        AccountMap storage map,
-        address user,
-        address provider,
-        uint8[] calldata tokenIds
-    ) internal {
+    function revokeTokens(AccountMap storage map, address user, address provider, uint8[] calldata tokenIds) internal {
         Account storage account = _get(map, user, provider);
         for (uint i = 0; i < tokenIds.length; i++) {
             account.revokedBitmap |= (uint256(1) << tokenIds[i]);

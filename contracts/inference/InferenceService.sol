@@ -89,22 +89,20 @@ library ServiceLibrary {
                     params.verifiability,
                     params.additionalInfo,
                     params.teeSignerAddress,
-                    false  // teeSignerAcknowledged - default to false, needs owner acknowledgement
+                    false // teeSignerAcknowledged - default to false, needs owner acknowledgement
                 )
             );
             return;
         }
         Service storage value = _get(map, provider);
-        
+
         // Check if critical fields are being changed (fields that require re-acknowledgement)
-        bool criticalFieldsChanged = (
-            keccak256(bytes(value.serviceType)) != keccak256(bytes(params.serviceType)) ||
+        bool criticalFieldsChanged = (keccak256(bytes(value.serviceType)) != keccak256(bytes(params.serviceType)) ||
             keccak256(bytes(value.model)) != keccak256(bytes(params.model)) ||
             keccak256(bytes(value.verifiability)) != keccak256(bytes(params.verifiability)) ||
             value.teeSignerAddress != params.teeSignerAddress ||
-            keccak256(bytes(value.additionalInfo)) != keccak256(bytes(params.additionalInfo))
-        );
-        
+            keccak256(bytes(value.additionalInfo)) != keccak256(bytes(params.additionalInfo)));
+
         // Update all fields
         value.serviceType = params.serviceType;
         value.inputPrice = params.inputPrice;
@@ -115,7 +113,7 @@ library ServiceLibrary {
         value.verifiability = params.verifiability;
         value.additionalInfo = params.additionalInfo;
         value.teeSignerAddress = params.teeSignerAddress;
-        
+
         // Reset acknowledgement if critical fields changed
         // Only price and URL changes don't require re-acknowledgement
         if (criticalFieldsChanged) {

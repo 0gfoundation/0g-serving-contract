@@ -20,12 +20,12 @@ struct TEESettlementData {
 }
 
 enum SettlementStatus {
-    SUCCESS,              // 0: Full settlement success
-    PARTIAL,              // 1: Partial settlement (insufficient balance)
-    PROVIDER_MISMATCH,    // 2: Provider mismatch
-    NO_TEE_SIGNER,        // 3: TEE signer not acknowledged
-    INVALID_NONCE,        // 4: Invalid or duplicate nonce
-    INVALID_SIGNATURE     // 5: Signature verification failed
+    SUCCESS, // 0: Full settlement success
+    PARTIAL, // 1: Partial settlement (insufficient balance)
+    PROVIDER_MISMATCH, // 2: Provider mismatch
+    NO_TEE_SIGNER, // 3: TEE signer not acknowledged
+    INVALID_NONCE, // 4: Invalid or duplicate nonce
+    INVALID_SIGNATURE // 5: Signature verification failed
 }
 
 contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, ERC165 {
@@ -43,8 +43,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.inference.v1.0")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant INFERENCE_SERVING_STORAGE_LOCATION = 0xdfd123095cdedb1cecbc229b30f7cf8745fb3d3951645ac4a8fa4c0895f89500;
-    
+    bytes32 private constant INFERENCE_SERVING_STORAGE_LOCATION =
+        0xdfd123095cdedb1cecbc229b30f7cf8745fb3d3951645ac4a8fa4c0895f89500;
+
     // Enforce sane lockTime to avoid instant bypass (0) or excessive freeze (> 7 days)
     uint public constant MIN_LOCKTIME = 1 hours;
     uint public constant MAX_LOCKTIME = 7 days;
@@ -96,10 +97,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         _transferOwnership(owner);
-        require(
-            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
-            "lockTime out of range"
-        );
+        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
@@ -113,10 +111,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function updateLockTime(uint _locktime) public onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(
-            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
-            "lockTime out of range"
-        );
+        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
         $.lockTime = _locktime;
     }
 
@@ -168,7 +163,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         $.accountMap.acknowledgeTEESigner(msg.sender, provider, acknowledged);
     }
 
-
     function revokeTEESignerAcknowledgement(address provider) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Service storage service = $.serviceMap.getService(provider);
@@ -199,7 +193,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.accountMap.isTokenRevoked(user, provider, tokenId);
     }
 
-
     function accountExists(address user, address provider) public view returns (bool) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.accountMap.accountExists(user, provider);
@@ -210,11 +203,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.accountMap.getPendingRefund(user, provider);
     }
 
-    function addAccount(
-        address user,
-        address provider,
-        string memory additionalInfo
-    ) external payable onlyLedger {
+    function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
 
@@ -231,7 +220,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        (uint balance, uint pendingRefund) = $.accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
+        (uint balance, uint pendingRefund) = $.accountMap.depositFund(
+            user,
+            provider,
+            cancelRetrievingAmount,
+            msg.value
+        );
 
         // Auto-acknowledge TEE signer when user deposits funds to provider (if not already acknowledged)
         Account storage account = $.accountMap.getAccount(user, provider);
@@ -333,8 +327,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
                 if (refund.amount <= remainingFee) {
                     remainingFee -= refund.amount;
-                    refund.amount = 0;           // Clear consumed amount
-                    refund.processed = true;     // Mark as processed to prevent double-counting
+                    refund.amount = 0; // Clear consumed amount
+                    refund.processed = true; // Mark as processed to prevent double-counting
                 } else {
                     refund.amount -= remainingFee;
                     remainingFee = 0;
@@ -353,36 +347,46 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     // Static view function for previewing settlement results without state changes
     function previewSettlementResults(
         TEESettlementData[] calldata settlements
-    ) external view returns (
-        address[] memory failedUsers,
-        SettlementStatus[] memory failureReasons,
-        address[] memory partialUsers, 
-        uint256[] memory partialAmounts
-    ) {
+    )
+        external
+        view
+        returns (
+            address[] memory failedUsers,
+            SettlementStatus[] memory failureReasons,
+            address[] memory partialUsers,
+            uint256[] memory partialAmounts
+        )
+    {
         require(settlements.length > 0, "No settlements provided");
 
         failedUsers = new address[](settlements.length);
         failureReasons = new SettlementStatus[](settlements.length);
         partialUsers = new address[](settlements.length);
         partialAmounts = new uint256[](settlements.length);
-        
+
         uint failedCount = 0;
         uint partialCount = 0;
 
         for (uint i = 0; i < settlements.length; i++) {
             TEESettlementData calldata settlement = settlements[i];
-            
+
             if (settlement.provider != msg.sender) {
-                _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, SettlementStatus.PROVIDER_MISMATCH);
+                _recordFailure(
+                    failedUsers,
+                    failureReasons,
+                    failedCount++,
+                    settlement.user,
+                    SettlementStatus.PROVIDER_MISMATCH
+                );
                 continue;
             }
-            
+
             (SettlementStatus status, uint256 unsettledAmount) = _previewTEESettlement(settlement);
-            
+
             if (status == SettlementStatus.SUCCESS) {
                 continue;
             }
-            
+
             if (status == SettlementStatus.PARTIAL) {
                 _recordPartial(partialUsers, partialAmounts, partialCount++, settlement.user, unsettledAmount);
                 continue;
@@ -400,12 +404,15 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function settleFeesWithTEE(
         TEESettlementData[] calldata settlements
-    ) external returns (
-        address[] memory failedUsers,
-        SettlementStatus[] memory failureReasons,
-        address[] memory partialUsers, 
-        uint256[] memory partialAmounts
-    ) {
+    )
+        external
+        returns (
+            address[] memory failedUsers,
+            SettlementStatus[] memory failureReasons,
+            address[] memory partialUsers,
+            uint256[] memory partialAmounts
+        )
+    {
         require(settlements.length > 0, "No settlements provided");
         require(settlements.length <= 50, "Too many settlements in batch");
 
@@ -413,28 +420,36 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         failureReasons = new SettlementStatus[](settlements.length);
         partialUsers = new address[](settlements.length);
         partialAmounts = new uint256[](settlements.length);
-        
+
         uint failedCount = 0;
         uint partialCount = 0;
         uint256 totalTransferAmount = 0;
 
         for (uint i = 0; i < settlements.length; i++) {
             TEESettlementData calldata settlement = settlements[i];
-            
+
             if (settlement.provider != msg.sender) {
-                _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, SettlementStatus.PROVIDER_MISMATCH);
+                _recordFailure(
+                    failedUsers,
+                    failureReasons,
+                    failedCount++,
+                    settlement.user,
+                    SettlementStatus.PROVIDER_MISMATCH
+                );
                 emit TEESettlementResult(settlement.user, SettlementStatus.PROVIDER_MISMATCH, settlement.totalFee);
                 continue;
             }
-            
-            (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) = _processTEESettlement(settlement);
+
+            (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) = _processTEESettlement(
+                settlement
+            );
             totalTransferAmount += settledAmount;
             emit TEESettlementResult(settlement.user, status, unsettledAmount);
-            
+
             if (status == SettlementStatus.SUCCESS) {
                 continue;
             }
-            
+
             if (status == SettlementStatus.PARTIAL) {
                 _recordPartial(partialUsers, partialAmounts, partialCount++, settlement.user, unsettledAmount);
                 continue;
@@ -456,7 +471,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     // View function to preview settlement without state changes
-    function _previewTEESettlement(TEESettlementData calldata settlement) private view returns (SettlementStatus status, uint256 unsettledAmount) {
+    function _previewTEESettlement(
+        TEESettlementData calldata settlement
+    ) private view returns (SettlementStatus status, uint256 unsettledAmount) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
@@ -479,7 +496,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // Calculate settlement amounts (without modifying state)
         uint256 balance = account.balance;
         uint256 unsettled = settlement.totalFee > balance ? settlement.totalFee - balance : 0;
-        
+
         // Return appropriate status
         if (unsettled > 0) {
             return (SettlementStatus.PARTIAL, unsettled);
@@ -488,7 +505,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
-    function _processTEESettlement(TEESettlementData calldata settlement) private returns (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) {
+    function _processTEESettlement(
+        TEESettlementData calldata settlement
+    ) private returns (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
 
@@ -515,7 +534,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint256 balance = account.balance;
         uint256 toSettle = settlement.totalFee > balance ? balance : settlement.totalFee;
         uint256 unsettled = settlement.totalFee > balance ? settlement.totalFee - balance : 0;
-        
+
         // Settle what we can
         if (toSettle > 0) {
             _settleFees(account, toSettle);
@@ -529,32 +548,37 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
-    function _verifySignature(TEESettlementData calldata settlement, address expectedSigner) private pure returns (bool) {
+    function _verifySignature(
+        TEESettlementData calldata settlement,
+        address expectedSigner
+    ) private pure returns (bool) {
         bytes calldata signature = settlement.signature;
         if (signature.length != 65) return false;
-        
-        bytes32 messageHash = keccak256(abi.encodePacked(
-            settlement.requestsHash,
-            settlement.nonce,
-            settlement.provider,
-            settlement.user,
-            settlement.totalFee
-        ));
-        
+
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                settlement.requestsHash,
+                settlement.nonce,
+                settlement.provider,
+                settlement.user,
+                settlement.totalFee
+            )
+        );
+
         bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
-        
+
         bytes32 r;
         bytes32 s;
         uint8 v;
-        
+
         assembly {
             r := calldataload(add(signature.offset, 0))
             s := calldataload(add(signature.offset, 32))
             v := byte(0, calldataload(add(signature.offset, 64)))
         }
-        
+
         if (v < 27) v += 27;
-        
+
         return ecrecover(ethSignedHash, v, r, s) == expectedSigner;
     }
 
@@ -581,11 +605,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     // === ERC165 Support ===
-    
+
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
-        return
-            interfaceId == type(IServing).interfaceId ||
-            super.supportsInterface(interfaceId);
+        return interfaceId == type(IServing).interfaceId || super.supportsInterface(interfaceId);
     }
 
     receive() external payable {
