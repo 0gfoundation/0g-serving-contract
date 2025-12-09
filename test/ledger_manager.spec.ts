@@ -233,7 +233,9 @@ describe("Ledger manager", () => {
         let unlockTime: number;
 
         beforeEach(async () => {
-            await Promise.all([ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance)]);
+            await Promise.all([
+                ledger.transferFund(provider1Address, "fine-tuning-test", ownerInitialFineTuningBalance),
+            ]);
 
             const res = await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             const receipt = await res.wait();
@@ -317,18 +319,20 @@ describe("Ledger manager", () => {
         // Need to retrieve funds first before deleting
         await ledger.retrieveFund([provider1Address], "fine-tuning-test");
         await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
-        
+
         // Wait for unlock time
         await ethers.provider.send("evm_increaseTime", [86401]);
         await ethers.provider.send("evm_mine", []);
-        
+
         // Process refunds
         await ledger.retrieveFund([provider1Address], "fine-tuning-test");
         await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
-        
+
         // Verify all funds have been retrieved and are available
         const ownerLedger = await ledger.getLedger(ownerAddress);
-        console.log(`Owner ledger before refund: totalBalance=${ownerLedger.totalBalance}, availableBalance=${ownerLedger.availableBalance}`);
+        console.log(
+            `Owner ledger before refund: totalBalance=${ownerLedger.totalBalance}, availableBalance=${ownerLedger.availableBalance}`
+        );
 
         // All funds should be back in availableBalance after processing refunds
         expect(ownerLedger.availableBalance).to.equal(ownerInitialLedgerBalance);
@@ -353,20 +357,15 @@ describe("Ledger manager", () => {
             const testService = await TestContract.deploy();
             await testService.waitForDeployment();
             const testServiceAddress = await testService.getAddress();
-            
+
             // Initialize the test service
             await testService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
-            
+
             // Register the service
             await expect(
-                ledger.registerService(
-                    "inference-test",
-                    "v2.0",
-                    testServiceAddress,
-                    "Test Inference Service v2.0"
-                )
+                ledger.registerService("inference-test", "v2.0", testServiceAddress, "Test Inference Service v2.0")
             ).to.emit(ledger, "ServiceRegistered");
-            
+
             // Verify service was registered
             const serviceInfo = await ledger.getServiceInfo(testServiceAddress);
             expect(serviceInfo.serviceType).to.equal("inference-test");
@@ -379,21 +378,21 @@ describe("Ledger manager", () => {
             // The test deployment already registered inference-test and fine-tuning-test
             const inferenceAddress = await ledger.getServiceAddressByName("inference-test");
             expect(inferenceAddress).to.equal(inferenceServingDeployment.address);
-            
+
             const fineTuningAddress = await ledger.getServiceAddressByName("fine-tuning-test");
             expect(fineTuningAddress).to.equal(fineTuningServingDeployment.address);
         });
 
         it("should get all active services", async () => {
             const services = await ledger.getAllActiveServices();
-            
+
             // Should have at least the two test services registered
             expect(services.length).to.be.at.least(2);
-            
+
             // Find our test services
-            const inferenceService = services.find(s => s.serviceType === "inference" && s.version === "test");
-            const fineTuningService = services.find(s => s.serviceType === "fine-tuning" && s.version === "test");
-            
+            const inferenceService = services.find((s) => s.serviceType === "inference" && s.version === "test");
+            const fineTuningService = services.find((s) => s.serviceType === "fine-tuning" && s.version === "test");
+
             expect(inferenceService).to.not.be.undefined;
             expect(fineTuningService).to.not.be.undefined;
             expect(inferenceService!.isRecommended).to.equal(true);
@@ -405,7 +404,7 @@ describe("Ledger manager", () => {
             const [inferenceVersion, inferenceAddress] = await ledger.getRecommendedService("inference");
             expect(inferenceVersion).to.equal("test");
             expect(inferenceAddress).to.equal(inferenceServingDeployment.address);
-            
+
             // Get recommended fine-tuning service
             const [fineTuningVersion, fineTuningAddress] = await ledger.getRecommendedService("fine-tuning");
             expect(fineTuningVersion).to.equal("test");
@@ -418,30 +417,26 @@ describe("Ledger manager", () => {
             const newService = await TestContract.deploy();
             await newService.waitForDeployment();
             const newServiceAddress = await newService.getAddress();
-            
+
             // Initialize and register
             await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
-            await ledger.registerService(
-                "inference",
-                "v2.0",
-                newServiceAddress,
-                "Inference Service v2.0"
-            );
-            
+            await ledger.registerService("inference", "v2.0", newServiceAddress, "Inference Service v2.0");
+
             // Set new version as recommended
-            await expect(
-                ledger.setRecommendedService("inference", "v2.0")
-            ).to.emit(ledger, "RecommendedServiceUpdated");
-            
+            await expect(ledger.setRecommendedService("inference", "v2.0")).to.emit(
+                ledger,
+                "RecommendedServiceUpdated"
+            );
+
             // Verify the new version is recommended
             const [version, address] = await ledger.getRecommendedService("inference");
             expect(version).to.equal("v2.0");
             expect(address).to.equal(newServiceAddress);
-            
+
             // Verify old version is no longer recommended
             const isTestRecommended = await ledger.isRecommendedVersion("inference", "test");
             expect(isTestRecommended).to.equal(false);
-            
+
             const isV2Recommended = await ledger.isRecommendedVersion("inference", "v2.0");
             expect(isV2Recommended).to.equal(true);
         });
@@ -449,38 +444,28 @@ describe("Ledger manager", () => {
         it("should get all versions of a service type", async () => {
             // Deploy and register multiple versions
             const TestContract = await ethers.getContractFactory("InferenceServing");
-            
+
             const v1Service = await TestContract.deploy();
             await v1Service.waitForDeployment();
             await v1Service.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
-            await ledger.registerService(
-                "inference",
-                "v1.0",
-                await v1Service.getAddress(),
-                "Inference v1.0"
-            );
-            
+            await ledger.registerService("inference", "v1.0", await v1Service.getAddress(), "Inference v1.0");
+
             const v2Service = await TestContract.deploy();
             await v2Service.waitForDeployment();
             await v2Service.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
-            await ledger.registerService(
-                "inference",
-                "v2.0", 
-                await v2Service.getAddress(),
-                "Inference v2.0"
-            );
-            
+            await ledger.registerService("inference", "v2.0", await v2Service.getAddress(), "Inference v2.0");
+
             // Get all versions
             const [versions, addresses, isRecommendedFlags] = await ledger.getAllVersions("inference");
-            
+
             // Should have test, v1.0, and v2.0 (possibly more from previous tests)
             expect(versions.length).to.be.at.least(3);
             expect(versions).to.include.members(["test", "v1.0", "v2.0"]);
-            
+
             // Check that we have corresponding addresses and recommendation flags
             expect(addresses.length).to.equal(versions.length);
             expect(isRecommendedFlags.length).to.equal(versions.length);
-            
+
             // Find the test version and verify it's recommended
             const testIndex = versions.indexOf("test");
             if (testIndex !== -1) {
@@ -504,28 +489,23 @@ describe("Ledger manager", () => {
             const newService = await TestContract.deploy();
             await newService.waitForDeployment();
             await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
-            
+
             // Try to register with an existing service name (inference-test)
             await expect(
-                ledger.registerService(
-                    "inference",
-                    "test",
-                    await newService.getAddress(),
-                    "Another inference test"
-                )
+                ledger.registerService("inference", "test", await newService.getAddress(), "Another inference test")
             ).to.be.revertedWith("Service name already exists");
         });
 
         it("should fail to set non-existent service as recommended", async () => {
-            await expect(
-                ledger.setRecommendedService("inference-test", "v99.9")
-            ).to.be.revertedWith("Service not found");
+            await expect(ledger.setRecommendedService("inference-test", "v99.9")).to.be.revertedWith(
+                "Service not found"
+            );
         });
 
         it("should revert when getting recommended service for non-existent type", async () => {
-            await expect(
-                ledger.getRecommendedService("non-existent-type")
-            ).to.be.revertedWith("No recommended service found for this type");
+            await expect(ledger.getRecommendedService("non-existent-type")).to.be.revertedWith(
+                "No recommended service found for this type"
+            );
         });
 
         it("should only allow owner to register services", async () => {
@@ -533,27 +513,27 @@ describe("Ledger manager", () => {
             const newService = await TestContract.deploy();
             await newService.waitForDeployment();
             await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
-            
+
             await expect(
-                ledger.connect(user1).registerService(
-                    "inference-test",
-                    "v3.0",
-                    await newService.getAddress(),
-                    "Unauthorized registration"
-                )
+                ledger
+                    .connect(user1)
+                    .registerService(
+                        "inference-test",
+                        "v3.0",
+                        await newService.getAddress(),
+                        "Unauthorized registration"
+                    )
             ).to.be.reverted;
         });
 
         it("should only allow owner to set recommended service", async () => {
-            await expect(
-                ledger.connect(user1).setRecommendedService("inference-test", "test")
-            ).to.be.reverted;
+            await expect(ledger.connect(user1).setRecommendedService("inference-test", "test")).to.be.reverted;
         });
     });
 
     describe("Receive function", () => {
         it("should automatically deposit funds when receiving ETH via transfer", async () => {
-            const depositAmount = ethers.parseEther("0.001");  // Use proper ether values
+            const depositAmount = ethers.parseEther("0.001"); // Use proper ether values
 
             // Get initial balance (user1 already has an account from beforeEach)
             const initialLedger = await ledger.getLedger(user1Address);
@@ -562,7 +542,7 @@ describe("Ledger manager", () => {
             // Use depositFund() instead of direct transfer
             const tx = await ledger.connect(user1).depositFund({ value: depositAmount });
             const receipt = await tx.wait();
-            expect(receipt?.status).to.equal(1);  // Ensure transaction succeeded
+            expect(receipt?.status).to.equal(1); // Ensure transaction succeeded
 
             // Check that the funds were added to existing balance
             const ledgerInfo = await ledger.getLedger(user1Address);
@@ -577,10 +557,7 @@ describe("Ledger manager", () => {
             const newUserAddress = await newUser.getAddress();
 
             // Verify account doesn't exist
-            await expect(ledger.getLedger(newUserAddress)).to.be.revertedWithCustomError(
-                ledger,
-                "LedgerNotExists"
-            );
+            await expect(ledger.getLedger(newUserAddress)).to.be.revertedWithCustomError(ledger, "LedgerNotExists");
 
             // Use depositFund() instead of direct transfer
             const tx = await ledger.connect(newUser).depositFund({ value: depositAmount });
@@ -624,7 +601,7 @@ describe("Ledger manager", () => {
             // Use depositFund() from two different users (owner has account, provider1 doesn't)
             await Promise.all([
                 ledger.connect(owner).depositFund({ value: amount1 }),
-                ledger.connect(provider1).depositFund({ value: amount2 })
+                ledger.connect(provider1).depositFund({ value: amount2 }),
             ]);
 
             // Check both balances
@@ -641,38 +618,43 @@ describe("Ledger manager", () => {
             // Step 1: Transfer funds to FineTuning service (normal business flow)
             const transferAmount = ethers.parseEther("1.5");
             await ledger.transferFund(provider1Address, "fine-tuning-test", transferAmount);
-            
+
             // Get initial state
             const initialOwnerLedger = await ledger.getLedger(ownerAddress);
             const initialAvailableBalance = initialOwnerLedger.availableBalance;
-            
+
             console.log("Before retrieveFund - Owner available balance:", initialAvailableBalance.toString());
-            
-            // Step 2: Set up refund and wait for unlock time  
+
+            // Step 2: Set up refund and wait for unlock time
             await ledger.retrieveFund([provider1Address], "fine-tuning-test");
             await ethers.provider.send("evm_increaseTime", [86401]); // 24+ hours
             await ethers.provider.send("evm_mine");
-            
+
             // Step 3: Retrieve funds (this triggers FineTuning -> LedgerManager ETH transfer)
             await ledger.retrieveFund([provider1Address], "fine-tuning-test");
-            
+
             // Step 4: Verify balance increased correctly (without double-counting from receive)
             const finalOwnerLedger = await ledger.getLedger(ownerAddress);
             const finalAvailableBalance = finalOwnerLedger.availableBalance;
             const balanceIncrease = finalAvailableBalance - initialAvailableBalance;
-            
+
             console.log("After retrieveFund - Owner available balance:", finalAvailableBalance.toString());
             console.log("Balance increase:", balanceIncrease.toString());
             console.log("Expected increase:", transferAmount.toString());
-            
+
             // The balance should increase by exactly the transfer amount, not double
             // If receive() incorrectly processed the business transfer, it would be 2x
-            expect(balanceIncrease).to.equal(BigInt(transferAmount), 
-                "Balance should increase by transfer amount only, receive() should not double-count business transfers");
-            
+            expect(balanceIncrease).to.equal(
+                BigInt(transferAmount),
+                "Balance should increase by transfer amount only, receive() should not double-count business transfers"
+            );
+
             // Verify the increase is exactly what we expect (not 0, not 2x)
             expect(balanceIncrease).to.not.equal(BigInt(0), "Balance should have increased");
-            expect(balanceIncrease).to.not.equal(transferAmount * BigInt(2), "Balance should not be double-counted by receive()");
+            expect(balanceIncrease).to.not.equal(
+                transferAmount * BigInt(2),
+                "Balance should not be double-counted by receive()"
+            );
         });
     });
 });

@@ -37,8 +37,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.finetuning.v1.0")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant FINETUNING_SERVING_STORAGE_LOCATION = 0x5dcaaa00d1d3fae8cd5d66aceca789aec54970049ac35cb62a7adefca50a6800;
-    
+    bytes32 private constant FINETUNING_SERVING_STORAGE_LOCATION =
+        0x5dcaaa00d1d3fae8cd5d66aceca789aec54970049ac35cb62a7adefca50a6800;
+
     // Enforce sane lockTime to avoid instant bypass (0) or excessive freeze (> 7 days)
     uint public constant MIN_LOCKTIME = 1 hours;
     uint public constant MAX_LOCKTIME = 7 days;
@@ -85,17 +86,11 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint _penaltyPercentage
     ) public onlyInitializeOnce {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(
-            _ledgerAddress != address(0) && _ledgerAddress.code.length > 0,
-            "Invalid ledger address"
-        );
+        require(_ledgerAddress != address(0) && _ledgerAddress.code.length > 0, "Invalid ledger address");
         require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
-        require(_locktime <= 365 days, "lockTime too large");        
+        require(_locktime <= 365 days, "lockTime too large");
         _transferOwnership(owner);
-        require(
-            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
-            "lockTime out of range"
-        );
+        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
@@ -111,10 +106,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function updateLockTime(uint _locktime) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(_locktime <= 365 days, "lockTime too large");
-        require(
-            _locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME,
-            "lockTime out of range"
-        );
+        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
         $.lockTime = _locktime;
     }
 
@@ -147,11 +139,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         require(limit == 0 || limit <= 50, "Limit too large");
-        return $.accountMap.getAccountsByProvider(
-            provider,
-            offset,
-            (limit == 0 ? 50 : limit)
-        );
+        return $.accountMap.getAccountsByProvider(provider, offset, (limit == 0 ? 50 : limit));
     }
 
     function getAccountsByUser(
@@ -194,7 +182,12 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        (uint balance, uint pendingRefund) = $.accountMap.depositFund(user, provider, cancelRetrievingAmount, msg.value);
+        (uint balance, uint pendingRefund) = $.accountMap.depositFund(
+            user,
+            provider,
+            cancelRetrievingAmount,
+            msg.value
+        );
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -359,11 +352,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     // === ERC165 Support ===
-    
+
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
-        return
-            interfaceId == type(IServing).interfaceId ||
-            super.supportsInterface(interfaceId);
+        return interfaceId == type(IServing).interfaceId || super.supportsInterface(interfaceId);
     }
 
     receive() external payable {
