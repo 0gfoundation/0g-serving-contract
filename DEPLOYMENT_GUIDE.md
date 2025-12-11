@@ -121,7 +121,7 @@ When releasing a new service version, follow these steps:
 
 **Important Note**: The main branch contains code for all services. Each release branch (e.g., `release/inference-v1`) is specific to a particular service version. Code for other services in a release branch should be considered inactive and not modified.
 
-Follow the scenarios below for detailed deployment and upgrade steps. And here we use zgTestnetV4 as the target network for all commands as examples.
+Follow the scenarios below for detailed deployment and upgrade steps. And here we use zgTestnetDev as the target network for all commands as examples.
 
 ## Scenario 1: Initial Contract Deployment
 
@@ -129,16 +129,16 @@ Follow the scenarios below for detailed deployment and upgrade steps. And here w
 
 ```bash
 # Deploy LedgerManager
-npx hardhat deploy --tags ledger --network zgTestnetV4
+npx hardhat deploy --tags ledger --network zgTestnetDev
 
 # Verify LedgerManager contract
-IMPL=$(cat deployments/zgTestnetV4/LedgerManagerImpl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/LedgerManagerBeacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/LedgerManager.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetDev/LedgerManagerImpl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/LedgerManagerBeacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/LedgerManager.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 ```
 
 ### 1.2 Deploy Inference v1.0
@@ -148,19 +148,19 @@ npx hardhat upgrade:forceImportAll --network zgTestnetV4
 git checkout main
 
 # Deploy contract
-SERVICE_TYPE=inference SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
+SERVICE_TYPE=inference SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetDev
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetDev/InferenceServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/InferenceServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/InferenceServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
 
 # Clean other service deployment files
-rm deployments/zgTestnetV4/FineTuningServing_*.json 2>/dev/null || true
+rm deployments/zgTestnetDev/FineTuningServing_*.json 2>/dev/null || true
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 
 # Create version info file
 cat > VERSION.json << EOF
@@ -193,20 +193,20 @@ git checkout main
 # Modify contract code (as needed)
 
 # Deploy new version
-SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
+SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags deploy-service --network zgTestnetDev
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v2.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v2.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v2.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetDev/InferenceServing_v2.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/InferenceServing_v2.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/InferenceServing_v2.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
 
 # Clean other version deployment files
-rm deployments/zgTestnetV4/InferenceServing_v1.0*.json 2>/dev/null || true
-rm deployments/zgTestnetV4/FineTuningServing_*.json 2>/dev/null || true
+rm deployments/zgTestnetDev/InferenceServing_v1.0*.json 2>/dev/null || true
+rm deployments/zgTestnetDev/FineTuningServing_*.json 2>/dev/null || true
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 
 # Update version info file
 cat > VERSION.json << EOF
@@ -237,19 +237,19 @@ git checkout main
 git checkout main
 
 # Deploy fine-tuning service
-SERVICE_TYPE=fine-tuning SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
+SERVICE_TYPE=fine-tuning SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetDev
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetDev/FineTuningServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/FineTuningServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/FineTuningServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
 
 # Clean other service deployment files
-rm deployments/zgTestnetV4/InferenceServing_*.json 2>/dev/null || true
+rm deployments/zgTestnetDev/InferenceServing_*.json 2>/dev/null || true
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 
 # Create version info file
 cat > VERSION.json << EOF
@@ -282,18 +282,18 @@ git checkout release/inference-v1.0
 # Modify contract code
 
 # Validate upgrade compatibility
-npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing --network zgTestnetV4
+npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing --network zgTestnetDev
 
 # Execute upgrade
-npx hardhat upgrade --name InferenceServing_v1.0 --artifact InferenceServing --execute true --network zgTestnetV4
+npx hardhat upgrade --name InferenceServing_v1.0 --artifact InferenceServing --execute true --network zgTestnetDev
 
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetDev/InferenceServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/InferenceServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/InferenceServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
 
 # Re-import upgraded contracts
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 
 # Update version info (increment patch version)
 cat > VERSION.json << EOF
@@ -317,13 +317,13 @@ git checkout main
 
 ```bash
 # Set inference v2.0 as recommended version
-SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags set-recommended --network zgTestnetV4
+SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags set-recommended --network zgTestnetDev
 ```
 
 ## Scenario 6: List All Services
 
 ```bash
-npx hardhat deploy --tags list-services --network zgTestnetV4
+npx hardhat deploy --tags list-services --network zgTestnetDev
 ```
 
 ## Scenario 7: Upgrade LedgerManager (Public Infrastructure)
@@ -335,22 +335,22 @@ LedgerManager is public infrastructure shared by all service versions. After upg
 git checkout main
 
 # Validate upgrade compatibility
-npx hardhat upgrade:validate --old LedgerManager --new LedgerManager --network zgTestnetV4
+npx hardhat upgrade:validate --old LedgerManager --new LedgerManager --network zgTestnetDev
 
 # Execute upgrade
-npx hardhat upgrade --name LedgerManager --artifact LedgerManager --execute true --network zgTestnetV4
+npx hardhat upgrade --name LedgerManager --artifact LedgerManager --execute true --network zgTestnetDev
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/LedgerManagerImpl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/LedgerManagerBeacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/LedgerManager.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetDev/LedgerManagerImpl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/LedgerManagerBeacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/LedgerManager.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
 
 # Re-import upgraded contracts
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 
 # Commit upgrade to main branch
-git add deployments/zgTestnetV4/LedgerManager*.json .openzeppelin/
+git add deployments/zgTestnetDev/LedgerManager*.json .openzeppelin/
 git commit -m "Upgrade LedgerManager"
 
 # Synchronize LedgerManager upgrade to all release branches
@@ -363,7 +363,7 @@ git checkout release/inference-v1
 git cherry-pick <ledger-upgrade-commit-hash>
 
 # Step 3: Re-import contracts (using updated LedgerManager)
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
 
 # Step 4: Commit and push updates to release branch
 git add deployments/ .openzeppelin/
@@ -389,3 +389,196 @@ git checkout main
 - **Full Synchronization**: If modifications affect all versions, update all release branches to include the latest modifications like LedgerManager
 - **Versioning Strategy**: If modifications are incompatible with existing versions, consider creating new public component versions instead of directly modifying existing components
 - **Test Coverage**: After modification, test all service versions that depend on the component to ensure functionality is normal
+
+## Scenario 8: Upgrade with Foundation-Owned Beacon
+
+When beacon ownership has been transferred to the Foundation (see Scenario 9), developers cannot execute the full upgrade (specifically the `upgradeTo` call). This scenario separates the upgrade process into two phases:
+
+- **Phase 1 (Developer)**: Deploy new implementation, verify contract, and prepare upgrade instructions
+- **Phase 2 (Foundation)**: Execute `upgradeTo` on chain explorer
+
+### Phase 1: Developer - Deploy and Prepare
+
+```bash
+# Switch to the release branch for the specific version
+git checkout release/inference-v1.0
+
+# Modify contract code as needed
+# ...
+
+# 1. Validate upgrade compatibility
+npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing --network zgTestnetDev
+
+# 2. Deploy new implementation only (without calling upgradeTo)
+npx hardhat upgrade:deployImpl --name InferenceServing_v1.0 --artifact InferenceServing --network zgTestnetDev
+
+# 3. Verify the new implementation contract
+IMPL=$(cat deployments/zgTestnetDev/InferenceServing_v1.0Impl.json | jq -r '.address')
+npx hardhat verify --network zgTestnetDev $IMPL
+
+# 4. Import storage layout (does NOT depend on Foundation's upgradeTo)
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
+
+# 5. Update VERSION.json if needed
+cat > VERSION.json << EOF
+{
+  "service": "inference",
+  "version": "v1.0",
+  "compatibleClientSDKs": ["v1.0.0", "v1.0.1"],
+  "compatibleServingImages": ["0g-inference:v1.0.0", "0g-inference:v1.0.1"]
+}
+EOF
+
+# 6. Commit and push
+git add deployments/ .openzeppelin/ upgrade-pending/ VERSION.json
+git commit -m "Deploy new impl for InferenceServing_v1.0 upgrade"
+git push origin release/inference-v1.0
+
+# Return to main branch
+git checkout main
+```
+
+The `upgrade:deployImpl` command will output an upgrade instruction file to `./upgrade-pending/` directory. Send this file to the Foundation.
+
+Example output:
+```json
+{
+  "network": "zgTestnetDev",
+  "chainId": "16600",
+  "timestamp": "2024-01-15T10:30:00.000Z",
+  "contractName": "InferenceServing_v1.0",
+  "artifact": "InferenceServing",
+  "newImplementation": "0x1234567890abcdef1234567890abcdef12345678",
+  "beacon": "0xabcdef1234567890abcdef1234567890abcdef12",
+  "currentImplementation": "0x9876543210fedcba9876543210fedcba98765432",
+  "action": {
+    "method": "upgradeTo(address)",
+    "methodSignature": "0x3659cfe6",
+    "parameter": "0x1234567890abcdef1234567890abcdef12345678"
+  },
+  "instructions": [
+    "1. Open beacon contract on chain explorer: 0xabcdef...",
+    "2. Navigate to \"Write Contract\" or \"Write as Proxy\" tab",
+    "3. Connect Foundation wallet (must be beacon owner)",
+    "4. Find and call upgradeTo(address) method",
+    "5. Input new implementation address: 0x1234...",
+    "6. Confirm and submit transaction",
+    "7. Verify upgrade by calling implementation() - should return: 0x1234..."
+  ]
+}
+```
+
+### Phase 2: Foundation - Execute Upgrade on Chain Explorer
+
+1. **Review the Upgrade**
+   - Review the new implementation contract code on chain explorer (already verified)
+   - Confirm the upgrade has been approved through proper governance process
+
+2. **Open Chain Explorer**
+   - Navigate to the Beacon contract address provided in the upgrade instruction file
+   - Example: `https://chain.0g.ai/address/0xabcdef...`
+
+3. **Connect Wallet**
+   - Click "Write Contract" tab
+   - Connect the Foundation's owner wallet (must be the beacon owner)
+
+4. **Execute upgradeTo**
+   - Find the `upgradeTo(address)` method
+   - Input the new implementation address from the upgrade instruction file
+   - Click "Write" and confirm the transaction
+
+5. **Verify Upgrade Success**
+   - Go to "Read Contract" tab
+   - Call `implementation()` method
+   - Confirm it returns the new implementation address
+
+### When to Use This Scenario
+
+Use this scenario when:
+
+- Beacon ownership has been transferred to Foundation or multisig (see Scenario 9)
+- You (developer) no longer have permission to call `upgradeTo` on the beacon
+- Upgrade governance requires Foundation approval before execution
+
+Use standard Scenario 4 when:
+
+- You still have beacon owner permissions (e.g., testnet, development)
+- Quick iteration is needed without governance overhead
+
+## Scenario 9: Transfer Ownership to Foundation
+
+This scenario covers transferring contract ownership from developer to Foundation. There are two types of ownership that can be transferred independently.
+
+### Understanding the Two Types of Ownership
+
+In the BeaconProxy architecture, there are **two independent owners** for each contract system:
+
+| Owner Type | Set By | Controls |
+|------------|--------|----------|
+| **Beacon Owner** | `UpgradeableBeacon` constructor (`msg.sender`) | Contract upgrades (`upgradeTo()`) |
+| **Business Contract Owner** | `initialize(owner)` call | Business logic administration (functions with `onlyOwner` modifier) |
+
+Both owners default to the deployer address and need to be transferred separately.
+
+### 9.1 Transfer Beacon Ownership
+
+Transferring beacon ownership gives Foundation control over contract upgrades. After transfer, developers must use Scenario 8 for upgrades.
+
+**Contracts to transfer:**
+
+- `LedgerManagerBeacon`
+- `InferenceServing_v1.0Beacon`
+- Other service version beacons as needed
+
+**Steps on Chain Explorer:**
+
+1. **Open Beacon Contract**
+   - Navigate to the beacon contract address on chain explorer
+   - Example: `https://chain.0g.ai/address/<LedgerManagerBeacon_address>`
+   - Beacon addresses can be found in `deployments/<network>/*Beacon.json`
+
+2. **Connect Developer Wallet**
+   - Click "Write Contract" tab
+   - Connect the current owner wallet (deployer)
+
+3. **Execute transferOwnership**
+   - Find `transferOwnership(address newOwner)` method
+   - Input Foundation address as `newOwner` parameter
+   - Click "Write" and confirm transaction
+
+4. **Verify Transfer**
+   - Go to "Read Contract" tab
+   - Call `owner()` method
+   - Confirm it returns the Foundation address
+
+**Repeat for each beacon contract that needs to be transferred.**
+
+### 9.2 Transfer Business Contract Ownership
+
+Transferring business contract ownership gives Foundation control over administrative functions (functions with `onlyOwner` modifier).
+
+**Contracts to transfer:**
+
+- `LedgerManager` (proxy address)
+- Service contracts if they have owner-restricted functions
+
+**Steps on Chain Explorer:**
+
+1. **Open Business Contract (Proxy)**
+   - Navigate to the proxy contract address on chain explorer
+   - Example: `https://chain.0g.ai/address/<LedgerManager_address>`
+   - Proxy addresses can be found in `deployments/<network>/<ContractName>.json` (without `Impl` or `Beacon` suffix)
+
+2. **Connect Developer Wallet**
+   - Click "Write as Proxy" tab (important: use proxy tab, not implementation)
+   - Connect the current owner wallet (deployer)
+
+3. **Execute transferOwnership**
+   - Find `transferOwnership(address newOwner)` method
+   - Input Foundation address as `newOwner` parameter
+   - Click "Write" and confirm transaction
+
+4. **Verify Transfer**
+   - Go to "Read as Proxy" tab
+   - Call `owner()` method
+   - Confirm it returns the Foundation address

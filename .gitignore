@@ -9,3 +9,7 @@ node_modules
 /typechain-types
 
 solcInputs
+
+# Dev 
+zgTestnetDev
+zgTestnetDev-*
