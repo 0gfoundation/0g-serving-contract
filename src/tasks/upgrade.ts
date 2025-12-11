@@ -5,6 +5,112 @@ import path from "path";
 import { UpgradeableBeacon } from "../../typechain-types";
 import { CONTRACTS, transact, validateError } from "../utils/utils";
 
+interface UpgradeInfo {
+    network: string;
+    chainId: string;
+    timestamp: string;
+    contractName: string;
+    artifact: string;
+    newImplementation: string;
+    beacon: string;
+    currentImplementation: string;
+    action: {
+        method: string;
+        methodSignature: string;
+        parameter: string;
+    };
+    instructions: string[];
+}
+
+/**
+ * Deploy new implementation without calling upgradeTo on beacon.
+ * Use this when beacon ownership has been transferred to Foundation.
+ * The Foundation will execute upgradeTo manually on chain explorer.
+ */
+task("upgrade:deployImpl", "Deploy new implementation without upgrading beacon (for foundation-owned beacons)")
+    .addParam("name", "name of the proxy contract", undefined, types.string, false)
+    .addParam("artifact", "name of the implementation contract", undefined, types.string, false)
+    .setAction(async (taskArgs: { name: string; artifact: string }, hre) => {
+        const { deployments, getNamedAccounts } = hre;
+        const { deployer } = await getNamedAccounts();
+        const chainId = (await hre.ethers.provider.getNetwork()).chainId;
+
+        // 1. Get beacon contract and current implementation
+        const beacon: UpgradeableBeacon = await hre.ethers.getContract(`${taskArgs.name}Beacon`, deployer);
+        const beaconAddress = await beacon.getAddress();
+        const currentImpl = await beacon.implementation();
+
+        console.log(`\n=== Deploying New Implementation ===`);
+        console.log(`Contract: ${taskArgs.name}`);
+        console.log(`Artifact: ${taskArgs.artifact}`);
+        console.log(`Beacon: ${beaconAddress}`);
+        console.log(`Current Implementation: ${currentImpl}`);
+
+        // 2. Deploy new implementation
+        const result = await deployments.deploy(`${taskArgs.name}Impl`, {
+            from: deployer,
+            contract: taskArgs.artifact,
+            log: true,
+        });
+        console.log(`\nNew implementation deployed: ${result.address}`);
+
+        // 3. Generate upgrade info for Foundation
+        const upgradeInfo: UpgradeInfo = {
+            network: hre.network.name,
+            chainId: chainId.toString(),
+            timestamp: new Date().toISOString(),
+            contractName: taskArgs.name,
+            artifact: taskArgs.artifact,
+            newImplementation: result.address,
+            beacon: beaconAddress,
+            currentImplementation: currentImpl,
+            action: {
+                method: "upgradeTo(address)",
+                methodSignature: "0x3659cfe6",
+                parameter: result.address,
+            },
+            instructions: [
+                `1. Open beacon contract on chain explorer: ${beaconAddress}`,
+                `2. Navigate to "Write Contract" or "Write as Proxy" tab`,
+                `3. Connect Foundation wallet (must be beacon owner)`,
+                `4. Find and call upgradeTo(address) method`,
+                `5. Input new implementation address: ${result.address}`,
+                `6. Confirm and submit transaction`,
+                `7. Verify upgrade by calling implementation() - should return: ${result.address}`,
+            ],
+        };
+
+        // 4. Save upgrade info to file
+        const outputDir = path.resolve(__dirname, "../../upgrade-pending");
+        fs.mkdirSync(outputDir, { recursive: true });
+        const outputFileName = `${taskArgs.name}-${hre.network.name}-${Date.now()}.json`;
+        const outputPath = path.join(outputDir, outputFileName);
+        fs.writeFileSync(outputPath, JSON.stringify(upgradeInfo, null, 2));
+
+        // 5. Print summary
+        console.log(`\n${"=".repeat(60)}`);
+        console.log(`  UPGRADE INSTRUCTION FOR FOUNDATION`);
+        console.log(`${"=".repeat(60)}`);
+        console.log(`\nBeacon Address: ${beaconAddress}`);
+        console.log(`New Implementation: ${result.address}`);
+        console.log(`\nMethod to call: upgradeTo(address)`);
+        console.log(`Parameter: ${result.address}`);
+        console.log(`\nFull upgrade info saved to: ${outputPath}`);
+        console.log(`\n${"=".repeat(60)}`);
+        console.log(`\nNext steps for developer:`);
+        console.log(`1. Verify the new implementation contract:`);
+        console.log(`   npx hardhat verify --network ${hre.network.name} ${result.address}`);
+        console.log(`\n2. Import storage layout:`);
+        console.log(`   npx hardhat upgrade:forceImportAll --network ${hre.network.name}`);
+        console.log(`\n3. Commit changes:`);
+        console.log(`   git add deployments/ .openzeppelin/ upgrade-pending/`);
+        console.log(`   git commit -m "Deploy new impl for ${taskArgs.name} upgrade"`);
+        console.log(`\n4. Send upgrade-pending/${outputFileName} to Foundation`);
+        console.log(`${"=".repeat(60)}\n`);
+
+        return upgradeInfo;
+    });
+
 task("upgrade", "upgrade contract")
     .addParam("name", "name of the proxy contract", undefined, types.string, false)
     .addParam("artifact", "name of the implementation contract", undefined, types.string, false)
