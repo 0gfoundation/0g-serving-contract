@@ -94,6 +94,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     // Events
     event ServiceRegistered(address indexed serviceAddress, string serviceName);
     event RecommendedServiceUpdated(string indexed serviceType, string version, address serviceAddress);
+    event LedgerInfoUpdated(address indexed user, string additionalInfo);
 
     // Errors
     error LedgerNotExists(address user);
@@ -197,6 +198,16 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         return (msg.value, 0);
     }
 
+    /// @notice Update additional info for an existing ledger
+    /// @param additionalInfo New additional info (max 4KB)
+    function updateAdditionalInfo(string memory additionalInfo) external withLedgerLock(msg.sender) {
+        require(bytes(additionalInfo).length <= MAX_ADDITIONAL_INFO_LENGTH, "Additional info exceeds 4KB limit");
+        LedgerManagerStorage storage $ = _getLedgerManagerStorage();
+        Ledger storage ledger = _get($, msg.sender);
+        ledger.additionalInfo = additionalInfo;
+        emit LedgerInfoUpdated(msg.sender, additionalInfo);
+    }
+
     function depositFund() external payable withLedgerLock(msg.sender) {
         _depositFundInternal(msg.sender, msg.value);
     }
@@ -206,10 +217,10 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(user);
 
-        // Create account if it doesn't exist
+        // Create account if it doesn't exist (with empty additionalInfo, can be updated later via updateAdditionalInfo)
         if (!_contains($, key)) {
             require(amount >= MIN_ACCOUNT_BALANCE, "Minimum deposit of 3 0G required for new account");
-            _set($, key, user, amount, "");
+            _set($, key, user, amount, "");  // Empty additionalInfo by design
         } else {
             Ledger storage ledger = $.ledgerMap._values[key];
             ledger.availableBalance += amount;
