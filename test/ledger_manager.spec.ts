@@ -353,13 +353,12 @@ describe("Ledger manager", () => {
     describe("Service Registry Management", () => {
         it("should register a new service", async () => {
             // Deploy a new test contract to register
+            // Note: We don't initialize it because the logic contract constructor disables initialization
+            // This is fine - registerService only checks interface support, not initialization state
             const TestContract = await ethers.getContractFactory("InferenceServing");
             const testService = await TestContract.deploy();
             await testService.waitForDeployment();
             const testServiceAddress = await testService.getAddress();
-
-            // Initialize the test service
-            await testService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
 
             // Register the service
             await expect(
@@ -418,8 +417,7 @@ describe("Ledger manager", () => {
             await newService.waitForDeployment();
             const newServiceAddress = await newService.getAddress();
 
-            // Initialize and register
-            await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
+            // Register (no need to initialize - constructor disables it)
             await ledger.registerService("inference", "v2.0", newServiceAddress, "Inference Service v2.0");
 
             // Set new version as recommended
@@ -447,12 +445,10 @@ describe("Ledger manager", () => {
 
             const v1Service = await TestContract.deploy();
             await v1Service.waitForDeployment();
-            await v1Service.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
             await ledger.registerService("inference", "v1.0", await v1Service.getAddress(), "Inference v1.0");
 
             const v2Service = await TestContract.deploy();
             await v2Service.waitForDeployment();
-            await v2Service.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
             await ledger.registerService("inference", "v2.0", await v2Service.getAddress(), "Inference v2.0");
 
             // Get all versions
@@ -488,7 +484,6 @@ describe("Ledger manager", () => {
             const TestContract = await ethers.getContractFactory("InferenceServing");
             const newService = await TestContract.deploy();
             await newService.waitForDeployment();
-            await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
 
             // Try to register with an existing service name (inference-test)
             await expect(
@@ -512,7 +507,6 @@ describe("Ledger manager", () => {
             const TestContract = await ethers.getContractFactory("InferenceServing");
             const newService = await TestContract.deploy();
             await newService.waitForDeployment();
-            await newService.initialize(lockTime, LedgerManagerDeployment.address, ownerAddress);
 
             await expect(
                 ledger

@@ -94,6 +94,19 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AllTokensRevoked(address indexed user, address indexed provider, uint newGeneration);
     error InvalidTEESignature(string reason);
 
+    /**
+     * @dev Constructor that disables initialization on the logic contract.
+     * This prevents the initialize function from being called on the logic contract itself.
+     * Only proxy contracts can call initialize.
+     *
+     * This is the recommended approach for upgradeable contracts to prevent
+     * unauthorized initialization of the logic contract.
+     */
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         _transferOwnership(owner);
