@@ -122,6 +122,19 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         $.ledgerMap._operationLocks[key] = false;
     }
 
+    /**
+     * @dev Constructor that disables initialization on the logic contract.
+     * This prevents the initialize function from being called on the logic contract itself.
+     * Only proxy contracts can call initialize.
+     *
+     * This is the recommended approach for upgradeable contracts to prevent
+     * unauthorized initialization of the logic contract.
+     */
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     function initialize(address owner) public onlyInitializeOnce {
         _transferOwnership(owner);
     }

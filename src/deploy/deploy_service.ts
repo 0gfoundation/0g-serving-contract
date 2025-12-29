@@ -66,7 +66,7 @@ const deploy: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     
     // Use the standard deployInBeaconProxy function
     await deployInBeaconProxy(hre, versionedContractMeta);
-    
+
     // Get the deployed contract and initialize it
     const serviceAddress = (await hre.ethers.getContract(deploymentName)).target as string;
     
