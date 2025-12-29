@@ -195,10 +195,28 @@ library AccountLibrary {
             return;
         }
 
+        // Preserve nonce and generation to prevent signature replay attacks
+        // when account is recreated
+        Account storage account = map._values[key];
+
+        // Clear all balance and state data
+        account.balance = 0;
+        account.pendingRefund = 0;
+        account.acknowledged = false;
+        account.validRefundsLength = 0;
+        account.revokedBitmap = 0;
+        delete account.refunds;
+        delete account.additionalInfo;
+
+        // Note: nonce and generation are intentionally NOT reset
+        // This prevents signature replay attacks if the account is recreated
+
+        // Remove from indexes to make account appear "deleted"
         map._providerIndex[provider].remove(key);
         map._userIndex[user].remove(key);
         map._keys.remove(key);
-        delete map._values[key];
+
+        // Note: We do NOT delete map._values[key] to preserve nonce/generation
     }
 
     function acknowledgeTEESigner(AccountMap storage map, address user, address provider, bool acknowledged) internal {
