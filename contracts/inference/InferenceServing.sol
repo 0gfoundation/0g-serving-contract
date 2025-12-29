@@ -406,6 +406,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         TEESettlementData[] calldata settlements
     )
         external
+        nonReentrant
         returns (
             address[] memory failedUsers,
             SettlementStatus[] memory failureReasons,
@@ -466,7 +467,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
         // Batch transfer all settled amounts at once
         if (totalTransferAmount > 0) {
-            payable(msg.sender).transfer(totalTransferAmount);
+            (bool success, ) = payable(msg.sender).call{value: totalTransferAmount}("");
+            require(success, "Transfer to provider failed");
         }
     }
 
