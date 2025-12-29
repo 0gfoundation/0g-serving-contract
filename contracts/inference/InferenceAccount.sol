@@ -3,6 +3,14 @@ pragma solidity >=0.8.0 <0.9.0;
 
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
+/// @notice Account structure for user-provider relationship
+/// @dev Invariants for refunds array management (grow-only strategy):
+/// 1. The refunds array grows on-demand up to MAX_REFUNDS_PER_ACCOUNT
+/// 2. Active refunds are stored in positions [0, validRefundsLength)
+/// 3. Inactive/reusable slots are in positions [validRefundsLength, refunds.length)
+/// 4. pendingRefund equals the sum of all refunds[i].amount where i < validRefundsLength
+/// 5. Array grows via push when needed, but never shrinks via pop - only slot reuse
+/// 6. The 'processed' field is kept for storage compatibility but not used in logic
 struct Account {
     address user;
     address provider;
@@ -272,48 +280,43 @@ library AccountLibrary {
     ) internal returns (uint, uint) {
         Account storage account = _get(map, user, provider);
 
-        if (cancelRetrievingAmount > 0 && account.refunds.length > 0) {
+        if (cancelRetrievingAmount > 0 && account.validRefundsLength > 0) {
+            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
             uint remainingCancel = cancelRetrievingAmount;
             uint newPendingRefund = account.pendingRefund;
 
-            // Process refunds in-place to avoid memory allocation
+            // Use swap-and-shrink: process active refunds and compact
             uint writeIndex = 0;
-            for (uint i = 0; i < account.refunds.length; i++) {
+            for (uint i = 0; i < account.validRefundsLength; i++) {
                 Refund storage refund = account.refunds[i];
 
-                if (refund.processed) {
-                    continue;
-                }
-
                 if (remainingCancel >= refund.amount) {
+                    // Fully cancel this refund - skip it (don't write back)
                     remainingCancel -= refund.amount;
                     newPendingRefund -= refund.amount;
-                    refund.processed = true; // Mark as processed instead of removing
                 } else if (remainingCancel > 0) {
+                    // Partially cancel this refund - keep with reduced amount
                     refund.amount -= remainingCancel;
                     newPendingRefund -= remainingCancel;
                     remainingCancel = 0;
-                }
-
-                // Keep unprocessed refunds
-                if (!refund.processed && i != writeIndex) {
-                    account.refunds[writeIndex] = refund;
-                    account.refunds[writeIndex].index = writeIndex;
+                    // Swap to writeIndex if needed
+                    if (i != writeIndex) {
+                        account.refunds[writeIndex] = refund;
+                        account.refunds[writeIndex].index = writeIndex;
+                    }
                     writeIndex++;
-                } else if (!refund.processed) {
+                } else {
+                    // Keep this refund unchanged
+                    if (i != writeIndex) {
+                        account.refunds[writeIndex] = refund;
+                        account.refunds[writeIndex].index = writeIndex;
+                    }
                     writeIndex++;
                 }
             }
 
-            // Update validRefundsLength after cancelling refunds
+            // Shrink active boundary (no pop needed - just adjust boundary)
             account.validRefundsLength = writeIndex;
-
-            // Cleanup if needed
-            if (writeIndex < account.refunds.length) {
-                _cleanupRefunds(account, writeIndex);
-                account.validRefundsLength = account.refunds.length; // Update after cleanup
-            }
-
             account.pendingRefund = newPendingRefund;
         }
 
@@ -328,55 +331,53 @@ library AccountLibrary {
         uint amount
     ) internal returns (uint) {
         Account storage account = _get(map, user, provider);
+
         if ((account.balance - account.pendingRefund) < amount) {
             revert InsufficientBalance(user, provider);
         }
 
-        // Check refund limit using validRefundsLength
+        // Check refund limit using validRefundsLength (active boundary)
         if (account.validRefundsLength >= MAX_REFUNDS_PER_ACCOUNT) {
             revert TooManyRefunds(user, provider);
         }
 
-        uint newIndex;
-        if (account.validRefundsLength < account.refunds.length) {
-            // Reuse dirty position (saves ~15,000 gas)
-            newIndex = account.validRefundsLength;
-            account.refunds[newIndex] = Refund(newIndex, amount, block.timestamp, false);
-        } else {
-            // Need to push new position
-            newIndex = account.refunds.length;
+        uint newIndex = account.validRefundsLength;
+
+        // Grow array on-demand: push if not enough capacity, reuse if available
+        if (account.refunds.length <= newIndex) {
             account.refunds.push(Refund(newIndex, amount, block.timestamp, false));
+        } else {
+            account.refunds[newIndex] = Refund(newIndex, amount, block.timestamp, false);
         }
 
-        account.validRefundsLength++;
+        account.validRefundsLength++; // Expand active boundary
         account.pendingRefund += amount;
         return newIndex;
     }
 
     function requestRefundAll(AccountMap storage map, address user, address provider) internal {
         Account storage account = _get(map, user, provider);
+
         uint amount = account.balance - account.pendingRefund;
         if (amount == 0) {
             return;
         }
 
-        // Check refund limit using validRefundsLength
+        // Check refund limit using validRefundsLength (active boundary)
         if (account.validRefundsLength >= MAX_REFUNDS_PER_ACCOUNT) {
             revert TooManyRefunds(user, provider);
         }
 
-        uint newIndex;
-        if (account.validRefundsLength < account.refunds.length) {
-            // Reuse dirty position (saves ~15,000 gas)
-            newIndex = account.validRefundsLength;
-            account.refunds[newIndex] = Refund(newIndex, amount, block.timestamp, false);
-        } else {
-            // Need to push new position
-            newIndex = account.refunds.length;
+        uint newIndex = account.validRefundsLength;
+
+        // Grow array on-demand: push if not enough capacity, reuse if available
+        if (account.refunds.length <= newIndex) {
             account.refunds.push(Refund(newIndex, amount, block.timestamp, false));
+        } else {
+            account.refunds[newIndex] = Refund(newIndex, amount, block.timestamp, false);
         }
 
-        account.validRefundsLength++;
+        account.validRefundsLength++; // Expand active boundary
         account.pendingRefund += amount;
     }
 
@@ -388,7 +389,8 @@ library AccountLibrary {
     ) internal returns (uint totalAmount, uint balance, uint pendingRefund) {
         Account storage account = _get(map, user, provider);
 
-        if (account.refunds.length == 0) {
+        if (account.validRefundsLength == 0) {
+            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
             return (0, account.balance, account.pendingRefund);
         }
 
@@ -397,20 +399,16 @@ library AccountLibrary {
         uint writeIndex = 0;
         uint currentTime = block.timestamp;
 
-        // Process refunds in-place
-        for (uint i = 0; i < account.refunds.length; i++) {
+        // Use swap-and-shrink: process active refunds and compact
+        for (uint i = 0; i < account.validRefundsLength; i++) {
             Refund storage refund = account.refunds[i];
 
-            if (refund.processed) {
-                continue;
-            }
-
             if (currentTime >= refund.createdAt + lockTime) {
+                // Refund is unlocked, process it (skip - don't write back)
                 totalAmount += refund.amount;
-                refund.processed = true; // Mark as processed
             } else {
+                // Refund still locked, keep it
                 pendingRefund += refund.amount;
-                // Keep unprocessed refunds
                 if (i != writeIndex) {
                     account.refunds[writeIndex] = refund;
                     account.refunds[writeIndex].index = writeIndex;
@@ -419,35 +417,59 @@ library AccountLibrary {
             }
         }
 
-        // Update valid refunds length
+        // Shrink active boundary (no pop needed - just adjust boundary)
         account.validRefundsLength = writeIndex;
-
-        // Clean up or mark dirty data
-        if (writeIndex < account.refunds.length) {
-            uint dirtyCount = account.refunds.length - writeIndex;
-
-            if (dirtyCount >= REFUND_CLEANUP_THRESHOLD) {
-                // Many dirty entries: physical cleanup is more efficient
-                _cleanupRefunds(account, writeIndex);
-                account.validRefundsLength = account.refunds.length; // Update after cleanup
-            } else {
-                // Few dirty entries: mark as processed to prevent duplicate processing
-                for (uint i = writeIndex; i < account.refunds.length; i++) {
-                    account.refunds[i].processed = true;
-                }
-            }
-        }
 
         account.balance -= totalAmount;
         account.pendingRefund = pendingRefund;
         balance = account.balance;
     }
 
-    function _cleanupRefunds(Account storage account, uint keepCount) private {
-        // Resize array to remove processed refunds
-        uint currentLength = account.refunds.length;
-        for (uint i = currentLength; i > keepCount; i--) {
-            account.refunds.pop();
+    /// @dev Migration function: Clean up old processed refunds for specified accounts
+    /// Should be called once after contract upgrade to clean all dirty data
+    /// This is a one-time migration utility, can be removed after migration completes
+    function migrateRefunds(
+        AccountMap storage map,
+        address[] calldata users,
+        address provider
+    ) internal returns (uint cleanedCount) {
+        cleanedCount = 0;
+        for (uint j = 0; j < users.length; j++) {
+            bytes32 key = _key(users[j], provider);
+            if (!_contains(map, key)) {
+                continue;
+            }
+
+            Account storage account = map._values[key];
+            if (account.validRefundsLength == 0) {
+                continue;
+            }
+
+            // Clean up old dirty data (processed=true) if present
+            uint writeIndex = 0;
+            bool hasDirty = false;
+            for (uint i = 0; i < account.validRefundsLength; i++) {
+                if (!account.refunds[i].processed) {
+                    if (i != writeIndex) {
+                        account.refunds[writeIndex] = account.refunds[i];
+                        account.refunds[writeIndex].index = writeIndex;
+                    }
+                    writeIndex++;
+                } else {
+                    hasDirty = true;
+                }
+            }
+
+            if (hasDirty) {
+                account.validRefundsLength = writeIndex;
+                // Recalculate pendingRefund after cleanup
+                uint newPendingRefund = 0;
+                for (uint i = 0; i < writeIndex; i++) {
+                    newPendingRefund += account.refunds[i].amount;
+                }
+                account.pendingRefund = newPendingRefund;
+                cleanedCount++;
+            }
         }
     }
 
