@@ -66,7 +66,11 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         EnumerableSet.AddressSet serviceAddresses;
         mapping(bytes32 => address) recommendedByType; // per-type recommended service pointer
         LedgerMap ledgerMap;
-        mapping(address => mapping(string => EnumerableSet.AddressSet)) userServiceProviders; // user => serviceType => providers
+        // DEPRECATED: Keep for storage layout compatibility only. Data migrated to userServiceProvidersByAddress.
+        // DO NOT USE THIS FIELD IN NEW CODE.
+        mapping(address => mapping(string => EnumerableSet.AddressSet)) userServiceProviders;
+        // Current mapping: user => serviceAddress => providers
+        mapping(address => mapping(address => EnumerableSet.AddressSet)) userServiceProvidersByAddress;
     }
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.ledger")) - 1)) & ~bytes32(uint256(0xff))
@@ -157,10 +161,10 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         address serviceAddress = $.serviceNameToAddress[serviceName];
         require(serviceAddress != address(0), "Service not found");
 
-        string memory serviceType = $.registeredServices[serviceAddress].serviceType;
-        EnumerableSet.AddressSet storage providers = $.userServiceProviders[user][serviceType];
-        address[] memory providerList = new address[](providers.length());
+        // Use new serviceAddress-based mapping
+        EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
 
+        address[] memory providerList = new address[](providers.length());
         for (uint256 i = 0; i < providers.length(); i++) {
             providerList[i] = providers.at(i);
         }
@@ -291,8 +295,8 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
                 ledger.additionalInfo
             );
 
-            // Add provider to service storage
-            _addProviderToService($, msg.sender, service.serviceType, provider);
+            // Add provider to service storage (using new serviceAddress-based mapping)
+            _addProviderToService($, msg.sender, serviceAddress, provider);
         }
 
         require(ledger.availableBalance >= transferAmount, "Insufficient balance");
@@ -345,13 +349,15 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function _deleteAllServiceAccounts(LedgerManagerStorage storage $, address user) private {
-        // Delete all service accounts dynamically
+        // Delete all service accounts dynamically (using serviceAddress-based mapping)
         uint256 serviceCount = $.serviceAddresses.length();
         for (uint256 i = 0; i < serviceCount; i++) {
             address serviceAddress = $.serviceAddresses.at(i);
             ServiceInfo storage service = $.registeredServices[serviceAddress];
 
-            EnumerableSet.AddressSet storage providers = $.userServiceProviders[user][service.serviceType];
+            // Use new serviceAddress-based mapping
+            EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
+
             address[] memory providerList = new address[](providers.length());
             for (uint j = 0; j < providers.length(); j++) {
                 providerList[j] = providers.at(j);
@@ -509,13 +515,72 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         return $.registeredServices[serviceAddress].isRecommended;
     }
 
+    // === Data Migration ===
+
+    /// @notice One-time migration function to move data from old mapping to new mapping
+    /// @dev Migrates userServiceProviders (serviceType-based) to userServiceProvidersByAddress (serviceAddress-based)
+    /// @dev Can be called by owner after contract upgrade to migrate existing data
+    /// @dev Safe to call multiple times - will only migrate data that hasn't been migrated yet
+    function migrateUserServiceProvidersMapping() external onlyOwner {
+        LedgerManagerStorage storage $ = _getLedgerManagerStorage();
+
+        // Get all registered services
+        uint256 serviceCount = $.serviceAddresses.length();
+        require(serviceCount > 0, "No services registered");
+
+        // Iterate through all services
+        for (uint256 i = 0; i < serviceCount; i++) {
+            address serviceAddress = $.serviceAddresses.at(i);
+            ServiceInfo storage service = $.registeredServices[serviceAddress];
+            string memory serviceType = service.serviceType;
+
+            // Get all ledger users
+            uint256 ledgerCount = $.ledgerMap._keys.length();
+
+            // For each user, migrate their providers for this service
+            for (uint256 j = 0; j < ledgerCount; j++) {
+                bytes32 ledgerKey = $.ledgerMap._keys.at(j);
+                address user = $.ledgerMap._values[ledgerKey].user;
+
+                // Get old mapping data
+                EnumerableSet.AddressSet storage oldProviders = $.userServiceProviders[user][serviceType];
+
+                // Skip if no data to migrate
+                if (oldProviders.length() == 0) {
+                    continue;
+                }
+
+                // Get new mapping reference
+                EnumerableSet.AddressSet storage newProviders = $.userServiceProvidersByAddress[user][serviceAddress];
+
+                // Copy providers to new mapping
+                uint256 providerCount = oldProviders.length();
+                for (uint256 k = 0; k < providerCount; k++) {
+                    address provider = oldProviders.at(k);
+                    // Only add if not already present (safe for multiple calls)
+                    if (!newProviders.contains(provider)) {
+                        newProviders.add(provider);
+                    }
+                }
+
+                // Clear old mapping to save storage
+                for (uint256 k = 0; k < providerCount; k++) {
+                    oldProviders.remove(oldProviders.at(0)); // Always remove first element
+                }
+            }
+        }
+    }
+
+    // === Internal Helper Functions ===
+
     function _addProviderToService(
         LedgerManagerStorage storage $,
         address user,
-        string memory serviceType,
+        address serviceAddress,
         address provider
     ) private {
-        EnumerableSet.AddressSet storage providers = $.userServiceProviders[user][serviceType];
+        // Write to new mapping structure (using serviceAddress as key)
+        EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
         providers.add(provider);
     }
 
