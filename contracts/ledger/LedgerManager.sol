@@ -201,12 +201,15 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function depositFundFor(address recipient) external payable withLedgerLock(recipient) {
+        require(recipient != address(0), "Invalid recipient address");
+        require(msg.value > 0, "Zero-value deposit not allowed");
+
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(recipient);
 
         // Create account if it doesn't exist
         if (!_contains($, key)) {
-            require(msg.value > 0, "Zero-value creation not allowed");
+            require(msg.value >= MIN_ACCOUNT_BALANCE, "Minimum deposit of 3 0G required for new account");
             _set($, key, recipient, msg.value, "");
         } else {
             Ledger storage ledger = $.ledgerMap._values[key];
