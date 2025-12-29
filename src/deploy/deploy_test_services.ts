@@ -40,7 +40,7 @@ const deploy: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     };
     
     await deployInBeaconProxy(hre, inferenceVersionedContractMeta);
-    
+
     // Get the deployed contract address and initialize
     const inferenceAddress = (await hre.ethers.getContract(inferenceDeploymentName)).target as string;
     const inferenceContract = CONTRACTS.InferenceServing.factory.connect(
@@ -67,7 +67,7 @@ const deploy: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     };
     
     await deployInBeaconProxy(hre, fineTuningVersionedContractMeta);
-    
+
     // Get the deployed contract address and initialize
     const fineTuningAddress = (await hre.ethers.getContract(fineTuningDeploymentName)).target as string;
     const fineTuningContract = CONTRACTS.FineTuningServing.factory.connect(

@@ -7,7 +7,7 @@ const deploy: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     
     console.log(`🚀 Deploying LedgerManager...`);
     await deployInBeaconProxy(hre, CONTRACTS.LedgerManager);
-    
+
     const ledgerManager = await getTypedContract(hre, CONTRACTS.LedgerManager);
     
     console.log(`⚙️ Initializing LedgerManager...`);
