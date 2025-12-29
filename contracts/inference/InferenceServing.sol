@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "../utils/Initializable.sol";
 import "./InferenceAccount.sol";
 import "./InferenceService.sol";
@@ -599,9 +600,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         TEESettlementData calldata settlement,
         address expectedSigner
     ) private pure returns (bool) {
-        bytes calldata signature = settlement.signature;
-        if (signature.length != 65) return false;
-
         bytes32 messageHash = keccak256(
             abi.encodePacked(
                 settlement.requestsHash,
@@ -612,21 +610,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             )
         );
 
-        bytes32 ethSignedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
+        bytes32 ethSignedHash = ECDSA.toEthSignedMessageHash(messageHash);
 
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
+        // ECDSA.tryRecover automatically checks s value malleability and returns error on invalid signature
+        (address recovered, ECDSA.RecoverError error) = ECDSA.tryRecover(ethSignedHash, settlement.signature);
 
-        assembly {
-            r := calldataload(add(signature.offset, 0))
-            s := calldataload(add(signature.offset, 32))
-            v := byte(0, calldataload(add(signature.offset, 64)))
-        }
-
-        if (v < 27) v += 27;
-
-        return ecrecover(ethSignedHash, v, r, s) == expectedSigner;
+        // Return true only if recovery succeeded and address matches
+        return error == ECDSA.RecoverError.NoError && recovered == expectedSigner;
     }
 
     function _recordFailure(
