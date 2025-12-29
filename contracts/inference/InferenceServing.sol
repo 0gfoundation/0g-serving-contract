@@ -183,6 +183,15 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, false);
     }
 
+    /// @notice Migration function to clean up old processed refunds (one-time use after upgrade)
+    /// @param users Array of user addresses to migrate
+    /// @param provider Provider address
+    /// @return cleanedCount Number of accounts that had dirty data cleaned
+    function migrateRefunds(address[] calldata users, address provider) external onlyOwner returns (uint cleanedCount) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.accountMap.migrateRefunds(users, provider);
+    }
+
     function revokeToken(address provider, uint8 tokenId) external {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         $.accountMap.revokeToken(msg.sender, provider, tokenId);
@@ -329,29 +338,45 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function _settleFees(Account storage account, uint amount) private {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
+
         if (amount > (account.balance - account.pendingRefund)) {
+            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
             uint remainingFee = amount - (account.balance - account.pendingRefund);
             account.pendingRefund -= remainingFee;
-            for (int i = int(account.refunds.length - 1); i >= 0; i--) {
+
+            // Use swap-and-shrink: process refunds from end to start
+            // Process from end to prioritize newer refunds for cancellation
+            uint writeIndex = 0;
+            bool[] memory shouldCancel = new bool[](account.validRefundsLength);
+
+            // First pass: mark which refunds to cancel (from end to start)
+            for (int i = int(account.validRefundsLength) - 1; i >= 0 && remainingFee > 0; i--) {
                 Refund storage refund = account.refunds[uint(i)];
-                if (refund.processed) {
-                    continue;
-                }
 
                 if (refund.amount <= remainingFee) {
                     remainingFee -= refund.amount;
-                    refund.amount = 0; // Clear consumed amount
-                    refund.processed = true; // Mark as processed to prevent double-counting
+                    shouldCancel[uint(i)] = true;
                 } else {
                     refund.amount -= remainingFee;
                     remainingFee = 0;
                 }
+            }
 
-                if (remainingFee == 0) {
-                    break;
+            // Second pass: compact array keeping non-cancelled refunds
+            for (uint i = 0; i < account.validRefundsLength; i++) {
+                if (!shouldCancel[i]) {
+                    if (i != writeIndex) {
+                        account.refunds[writeIndex] = account.refunds[i];
+                        account.refunds[writeIndex].index = writeIndex;
+                    }
+                    writeIndex++;
                 }
             }
+
+            // Shrink active boundary (no pop needed - just adjust boundary)
+            account.validRefundsLength = writeIndex;
         }
+
         account.balance -= amount;
         $.ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
