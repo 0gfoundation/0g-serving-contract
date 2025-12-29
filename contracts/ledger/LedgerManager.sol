@@ -214,6 +214,8 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
     // Internal function for deposit logic without modifier
     function _depositFundInternal(address user, uint256 amount) internal {
+        require(amount > 0, "Deposit amount must be greater than zero");
+
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(user);
 
