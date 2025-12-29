@@ -226,6 +226,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
+        require(user != address(0), "Invalid user address");
+        require(provider != address(0), "Invalid provider address");
+
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
 
@@ -241,6 +244,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
+        require(user != address(0), "Invalid user address");
+        require(provider != address(0), "Invalid provider address");
+
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.depositFund(
             user,
@@ -396,6 +402,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         )
     {
         require(settlements.length > 0, "No settlements provided");
+        require(settlements.length <= 50, "Too many settlements (max 50)");
 
         failedUsers = new address[](settlements.length);
         failureReasons = new SettlementStatus[](settlements.length);
