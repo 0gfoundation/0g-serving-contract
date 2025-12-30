@@ -139,6 +139,10 @@ library ServiceLibrary {
         service.teeSignerAcknowledged = false;
     }
 
+    function serviceExists(ServiceMap storage map, address provider) internal view returns (bool) {
+        return _contains(map, _key(provider));
+    }
+
     function _at(ServiceMap storage map, uint index) internal view returns (Service storage) {
         bytes32 key = map._keys.at(index);
         return map._values[key];
