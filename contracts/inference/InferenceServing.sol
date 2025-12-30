@@ -456,7 +456,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
     }
 
-    // Static view function for previewing settlement results without state changes
+    /// @notice Preview settlement results for a batch of settlements without state changes
+    /// @dev WARNING: If the same user appears multiple times in the batch,
+    ///      only the first occurrence will show accurate preview results.
+    ///      Subsequent occurrences will use stale balance/nonce values since
+    ///      this is a view function that cannot simulate state changes.
+    ///      For accurate preview of batches with duplicate users, call this
+    ///      function separately for each unique user.
+    /// @param settlements Array of settlement data to preview
+    /// @return failedUsers Array of user addresses that failed validation
+    /// @return failureReasons Array of failure reasons corresponding to failedUsers
+    /// @return partialUsers Array of user addresses with insufficient balance
+    /// @return partialAmounts Array of unsettled amounts corresponding to partialUsers
     function previewSettlementResults(
         TEESettlementData[] calldata settlements
     )
