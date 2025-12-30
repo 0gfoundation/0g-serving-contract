@@ -335,11 +335,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         (totalAmount, balance, pendingRefund) = $.accountMap.processRefund(user, provider, $.lockTime);
 
         if (totalAmount > 0) {
+            // Emit event before external call to prevent reentrancy-caused event ordering issues
+            emit BalanceUpdated(user, provider, balance, pendingRefund);
+
             (bool success, ) = payable(msg.sender).call{value: totalAmount}("");
             if (!success) {
                 revert TransferFailed();
             }
-            emit BalanceUpdated(user, provider, balance, pendingRefund);
         }
     }
 
@@ -395,15 +397,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (stake > 0) {
             $.providerStake[msg.sender] = 0;
 
+            // Emit events before external call to prevent reentrancy-caused event ordering issues
+            emit ProviderStakeReturned(msg.sender, stake);
+            emit ServiceRemoved(msg.sender);
+
             (bool success, ) = payable(msg.sender).call{value: stake}("");
             if (!success) {
                 revert TransferFailed();
             }
-
-            emit ProviderStakeReturned(msg.sender, stake);
+        } else {
+            emit ServiceRemoved(msg.sender);
         }
-
-        emit ServiceRemoved(msg.sender);
     }
 
     function _settleFees(Account storage account, uint amount) private {
