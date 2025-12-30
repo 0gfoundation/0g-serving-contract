@@ -600,14 +600,40 @@ describe("Inference Serving", () => {
             requestsHash: string,
             nonce: bigint
         ): Promise<TEESettlementDataStruct> {
-            // Create message hash exactly like the contract
-            const messageHash = ethers.solidityPackedKeccak256(
-                ["bytes32", "uint256", "address", "address", "uint256"],
-                [requestsHash, nonce, provider, user, totalFee]
-            );
+            // Get chain ID and contract address
+            const chainId = (await ethers.provider.getNetwork()).chainId;
+            const servingAddress = await serving.getAddress();
 
-            // Sign using the exact same approach as fine_tuning_serving.spec.ts backfillVerifierInput
-            const signature = await teeWallet.signMessage(ethers.toBeArray(messageHash));
+            // EIP-712 Domain
+            const domain = {
+                name: "0G Inference Serving",
+                version: "1",
+                chainId: chainId,
+                verifyingContract: servingAddress,
+            };
+
+            // EIP-712 Types
+            const types = {
+                TEESettlement: [
+                    { name: "requestsHash", type: "bytes32" },
+                    { name: "nonce", type: "uint256" },
+                    { name: "provider", type: "address" },
+                    { name: "user", type: "address" },
+                    { name: "totalFee", type: "uint256" },
+                ],
+            };
+
+            // EIP-712 Value
+            const value = {
+                requestsHash,
+                nonce,
+                provider,
+                user,
+                totalFee,
+            };
+
+            // Sign using EIP-712
+            const signature = await teeWallet.signTypedData(domain, types, value);
 
             return {
                 user,
