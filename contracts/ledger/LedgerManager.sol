@@ -87,6 +87,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     // Constants
     uint public constant MAX_PROVIDERS_PER_BATCH = 20;
     uint public constant MAX_SERVICES = 500;
+    uint public constant MAX_PROVIDERS_PER_USER_PER_SERVICE = 50; // Limit to prevent unbounded gas in _deleteAllServiceAccounts
     uint public constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
     uint public constant MIN_ACCOUNT_BALANCE = 3 ether; // 3 0G minimum account balance
     uint public constant MIN_TRANSFER_AMOUNT = 1 ether; // 1 0G minimum transfer for new service account
@@ -103,6 +104,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     error LedgerExists(address user);
     error InsufficientBalance(address user);
     error TooManyProviders(uint requested, uint maximum);
+    error TooManyProvidersForService(uint current, uint maximum);
     error InvalidServiceType(string serviceType);
     error ServiceNotRegistered(address serviceAddress);
     error ServiceNameExists(string serviceName);
@@ -687,6 +689,12 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     ) private {
         // Write to new mapping structure (using serviceAddress as key)
         EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
+
+        // Check limit before adding to prevent unbounded gas in _deleteAllServiceAccounts
+        if (providers.length() >= MAX_PROVIDERS_PER_USER_PER_SERVICE) {
+            revert TooManyProvidersForService(providers.length(), MAX_PROVIDERS_PER_USER_PER_SERVICE);
+        }
+
         providers.add(provider);
     }
 
