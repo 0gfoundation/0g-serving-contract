@@ -233,6 +233,11 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.accountMap.accountExists(user, provider);
     }
 
+    function serviceExists(address provider) public view returns (bool) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        return $.serviceMap.serviceExists(provider);
+    }
+
     function getPendingRefund(address user, address provider) public view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.accountMap.getPendingRefund(user, provider);
@@ -535,10 +540,21 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         TEESettlementData calldata settlement
     ) private view returns (SettlementStatus status, uint256 unsettledAmount) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
+
+        // Check if account exists to prevent revert in batch processing
+        if (!$.accountMap.accountExists(settlement.user, msg.sender)) {
+            return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee);
+        }
+
+        // Check if service exists to prevent revert in batch processing
+        if (!$.serviceMap.serviceExists(msg.sender)) {
+            return (SettlementStatus.PROVIDER_MISMATCH, settlement.totalFee);
+        }
+
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
+        Service storage service = $.serviceMap.getService(msg.sender);
 
         // Validate TEE signer acknowledgement - both user and service must be acknowledged, and service must have valid TEE signer address
-        Service storage service = $.serviceMap.getService(msg.sender);
         if (!account.acknowledged || !service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
             return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee);
         }
@@ -569,10 +585,21 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         TEESettlementData calldata settlement
     ) private returns (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
+
+        // Check if account exists to prevent revert in batch processing
+        if (!$.accountMap.accountExists(settlement.user, msg.sender)) {
+            return (SettlementStatus.INVALID_SIGNATURE, settlement.totalFee, 0);
+        }
+
+        // Check if service exists to prevent revert in batch processing
+        if (!$.serviceMap.serviceExists(msg.sender)) {
+            return (SettlementStatus.PROVIDER_MISMATCH, settlement.totalFee, 0);
+        }
+
         Account storage account = $.accountMap.getAccount(settlement.user, msg.sender);
+        Service storage service = $.serviceMap.getService(msg.sender);
 
         // Validate TEE signer acknowledgement - both user and service must be acknowledged, and service must have valid TEE signer address
-        Service storage service = $.serviceMap.getService(msg.sender);
         if (!account.acknowledged || !service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
             return (SettlementStatus.NO_TEE_SIGNER, settlement.totalFee, 0);
         }
