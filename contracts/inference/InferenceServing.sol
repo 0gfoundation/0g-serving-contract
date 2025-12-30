@@ -105,6 +105,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event TokenRevoked(address indexed user, address indexed provider, uint8 tokenId);
     event TokensRevoked(address indexed user, address indexed provider, uint8[] tokenIds);
     event AllTokensRevoked(address indexed user, address indexed provider, uint newGeneration);
+    event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
+    event ContractInitialized(address indexed owner, uint256 lockTime, address ledgerAddress);
     error InvalidTEESignature(string reason);
 
     /**
@@ -127,6 +129,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
+        emit ContractInitialized(owner, _locktime, _ledgerAddress);
     }
 
     modifier onlyLedger() {
@@ -138,7 +141,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function updateLockTime(uint _locktime) public onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+        uint256 oldLockTime = $.lockTime;
         $.lockTime = _locktime;
+        emit LockTimeUpdated(oldLockTime, _locktime);
     }
 
     function getAccount(address user, address provider) public view returns (Account memory) {
