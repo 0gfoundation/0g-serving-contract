@@ -162,9 +162,10 @@ library AccountLibrary {
         if (users.length > 500) {
             revert BatchSizeTooLarge(users.length, 500);
         }
-        accounts = new Account[](users.length);
+        uint usersLength = users.length;
+        accounts = new Account[](usersLength);
 
-        for (uint i = 0; i < users.length; i++) {
+        for (uint i = 0; i < usersLength; i++) {
             bytes32 key = _key(users[i], provider);
             if (_contains(map, key)) {
                 accounts[i] = map._values[key];
@@ -251,7 +252,8 @@ library AccountLibrary {
 
     function revokeTokens(AccountMap storage map, address user, address provider, uint8[] calldata tokenIds) internal {
         Account storage account = _get(map, user, provider);
-        for (uint i = 0; i < tokenIds.length; i++) {
+        uint tokenIdsLength = tokenIds.length;
+        for (uint i = 0; i < tokenIdsLength; i++) {
             account.revokedBitmap |= (uint256(1) << tokenIds[i]);
         }
     }
