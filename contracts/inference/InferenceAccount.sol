@@ -75,8 +75,8 @@ library AccountLibrary {
             return (new Account[](0), total);
         }
 
-        uint end = offset + limit;
-        if (limit == 0 || end > total) {
+        uint end = limit == 0 ? total : offset + limit;
+        if (end > total) {
             end = total;
         }
 
