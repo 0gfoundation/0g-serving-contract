@@ -95,6 +95,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     event ServiceRegistered(address indexed serviceAddress, string serviceName);
     event RecommendedServiceUpdated(string indexed serviceType, string version, address serviceAddress);
     event LedgerInfoUpdated(address indexed user, string additionalInfo);
+    event FundSpent(address indexed user, address indexed service, uint256 amount);
 
     // Errors
     error LedgerNotExists(address user);
@@ -615,6 +616,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         Ledger storage ledger = _get($, user);
         require((ledger.totalBalance - ledger.availableBalance) >= amount, "Insufficient balance");
         ledger.totalBalance -= amount;
+        emit FundSpent(user, msg.sender, amount);
     }
 
     function _at(uint index) internal view returns (Ledger storage) {
