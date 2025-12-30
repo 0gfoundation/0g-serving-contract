@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.8.0;
+pragma solidity >=0.8.22 <0.9.0;
 
 /**
  * @dev This is a base contract to aid in writing upgradeable contracts that use
