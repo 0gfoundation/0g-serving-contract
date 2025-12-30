@@ -472,15 +472,16 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert TooManySettlements(settlements.length, 50);
         }
 
-        failedUsers = new address[](settlements.length);
-        failureReasons = new SettlementStatus[](settlements.length);
-        partialUsers = new address[](settlements.length);
-        partialAmounts = new uint256[](settlements.length);
+        uint settlementsLength = settlements.length;
+        failedUsers = new address[](settlementsLength);
+        failureReasons = new SettlementStatus[](settlementsLength);
+        partialUsers = new address[](settlementsLength);
+        partialAmounts = new uint256[](settlementsLength);
 
         uint failedCount = 0;
         uint partialCount = 0;
 
-        for (uint i = 0; i < settlements.length; i++) {
+        for (uint i = 0; i < settlementsLength; i++) {
             TEESettlementData calldata settlement = settlements[i];
 
             if (settlement.provider != msg.sender) {
@@ -534,16 +535,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert TooManySettlements(settlements.length, 50);
         }
 
-        failedUsers = new address[](settlements.length);
-        failureReasons = new SettlementStatus[](settlements.length);
-        partialUsers = new address[](settlements.length);
-        partialAmounts = new uint256[](settlements.length);
+        uint settlementsLength = settlements.length;
+        failedUsers = new address[](settlementsLength);
+        failureReasons = new SettlementStatus[](settlementsLength);
+        partialUsers = new address[](settlementsLength);
+        partialAmounts = new uint256[](settlementsLength);
 
         uint failedCount = 0;
         uint partialCount = 0;
         uint256 totalTransferAmount = 0;
 
-        for (uint i = 0; i < settlements.length; i++) {
+        for (uint i = 0; i < settlementsLength; i++) {
             TEESettlementData calldata settlement = settlements[i];
 
             if (settlement.provider != msg.sender) {
