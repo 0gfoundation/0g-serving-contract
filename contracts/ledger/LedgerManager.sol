@@ -305,17 +305,23 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
         ledger.availableBalance -= amount;
         ledger.totalBalance -= amount;
-        (bool success, ) = payable(msg.sender).call{value: amount}("");
-        if (!success) {
-            revert TransferFailed();
-        }
 
         // Auto-delete account if total balance reaches 0
-        if (ledger.totalBalance == 0) {
-            _deleteAllServiceAccounts($, msg.sender);
+        // Delete account records BEFORE external call to prevent reentrancy issues
+        bool shouldDelete = (ledger.totalBalance == 0);
+        if (shouldDelete) {
             bytes32 key = _key(msg.sender);
             $.ledgerMap._keys.remove(key);
             delete $.ledgerMap._values[key];
+
+            // Delete all service accounts (involves external calls to service contracts)
+            _deleteAllServiceAccounts($, msg.sender);
+        }
+
+        // External call comes last (CEI pattern)
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        if (!success) {
+            revert TransferFailed();
         }
     }
 
