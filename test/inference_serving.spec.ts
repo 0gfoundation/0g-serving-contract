@@ -271,8 +271,12 @@ describe("Inference Serving", () => {
         });
 
         it("should enforce pagination limits", async () => {
-            await expect(serving.getAccountsByProvider(provider1Address, 0, 51)).to.be.revertedWith("Limit too large");
-            await expect(serving.getAccountsByUser(ownerAddress, 0, 51)).to.be.revertedWith("Limit too large");
+            await expect(serving.getAccountsByProvider(provider1Address, 0, 51))
+                .to.be.revertedWithCustomError(serving, "LimitTooLarge")
+                .withArgs(51, 50);
+            await expect(serving.getAccountsByUser(ownerAddress, 0, 51))
+                .to.be.revertedWithCustomError(serving, "LimitTooLarge")
+                .withArgs(51, 50);
         });
     });
 
@@ -820,8 +824,9 @@ describe("Inference Serving", () => {
         });
 
         it("should revert with empty settlements array", async () => {
-            await expect(serving.connect(provider1).settleFeesWithTEE([])).to.be.revertedWith(
-                "No settlements provided"
+            await expect(serving.connect(provider1).settleFeesWithTEE([])).to.be.revertedWithCustomError(
+                serving,
+                "NoSettlementsProvided"
             );
         });
 

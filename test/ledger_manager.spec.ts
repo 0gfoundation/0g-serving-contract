@@ -477,7 +477,7 @@ describe("Ledger manager", () => {
                     inferenceServingDeployment.address,
                     "Duplicate service"
                 )
-            ).to.be.revertedWith("Service already registered");
+            ).to.be.revertedWithCustomError(ledger, "ServiceAlreadyRegistered");
         });
 
         it("should fail to register service with existing name", async () => {
@@ -488,18 +488,20 @@ describe("Ledger manager", () => {
             // Try to register with an existing service name (inference-test)
             await expect(
                 ledger.registerService("inference", "test", await newService.getAddress(), "Another inference test")
-            ).to.be.revertedWith("Service name already exists");
+            ).to.be.revertedWithCustomError(ledger, "ServiceNameExists");
         });
 
         it("should fail to set non-existent service as recommended", async () => {
-            await expect(ledger.setRecommendedService("inference-test", "v99.9")).to.be.revertedWith(
-                "Service not found"
+            await expect(ledger.setRecommendedService("inference-test", "v99.9")).to.be.revertedWithCustomError(
+                ledger,
+                "ServiceNotFound"
             );
         });
 
         it("should revert when getting recommended service for non-existent type", async () => {
-            await expect(ledger.getRecommendedService("non-existent-type")).to.be.revertedWith(
-                "No recommended service found for this type"
+            await expect(ledger.getRecommendedService("non-existent-type")).to.be.revertedWithCustomError(
+                ledger,
+                "NoRecommendedService"
             );
         });
 
