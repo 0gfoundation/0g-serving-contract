@@ -904,9 +904,6 @@ describe("Inference Serving", () => {
                 const nonce = BigInt(Date.now());
                 const requestedFee = ownerInitialInferenceBalance + ethers.parseEther("0.05"); // More than available
 
-                // Get initial balance
-                const initialBalance = await serving.getAccount(ownerAddress, provider1Address);
-                const availableBalance = initialBalance.balance;
 
                 // Create settlement with more fee than available balance
                 const settlement = await createValidTEESettlement(
@@ -918,11 +915,9 @@ describe("Inference Serving", () => {
                 );
 
                 // Check partial settlement before execution
-                const result = await serving.connect(provider1).settleFeesWithTEE.staticCall([settlement]);
-                expect(result.failedUsers).to.have.length(0); // No validation failures
-                expect(result.partialUsers).to.have.length(1); // One partial settlement
-                expect(result.partialUsers[0]).to.equal(ownerAddress);
-                expect(result.partialAmounts[0]).to.equal(requestedFee - availableBalance);
+                const statuses = await serving.connect(provider1).settleFeesWithTEE.staticCall([settlement]);
+                expect(statuses).to.have.length(1);
+                expect(statuses[0]).to.equal(1); // 1 = PARTIAL_SETTLEMENT
 
                 // Execute settlement
                 await serving.connect(provider1).settleFeesWithTEE([settlement]);
@@ -953,10 +948,9 @@ describe("Inference Serving", () => {
                 );
 
                 // Check return values before execution
-                const result = await serving.connect(provider1).settleFeesWithTEE.staticCall([settlement]);
-                expect(result.failedUsers).to.have.length(0); // No validation failures
-                expect(result.partialUsers).to.have.length(0); // No partial settlements
-                expect(result.partialAmounts).to.have.length(0);
+                const statuses = await serving.connect(provider1).settleFeesWithTEE.staticCall([settlement]);
+                expect(statuses).to.have.length(1);
+                expect(statuses[0]).to.equal(0); // 0 = SUCCESS
 
                 // Execute settlement
                 await serving.connect(provider1).settleFeesWithTEE([settlement]);
@@ -1000,13 +994,14 @@ describe("Inference Serving", () => {
                 );
 
                 // Check return values before execution
-                const result = await serving
+                const statuses = await serving
                     .connect(provider1)
                     .settleFeesWithTEE.staticCall([ownerSettlement, user1Settlement]);
-                expect(result.failedUsers).to.have.length(0); // No validation failures
-                expect(result.partialUsers).to.have.length(1); // Owner has partial settlement
-                expect(result.partialUsers[0]).to.equal(ownerAddress);
-                expect(result.partialAmounts[0]).to.equal(ownerRequestedFee - ownerInitialBalance.balance);
+                expect(statuses).to.have.length(2);
+                // First settlement (owner): partial
+                expect(statuses[0]).to.equal(1); // 1 = PARTIAL_SETTLEMENT
+                // Second settlement (user1): full
+                expect(statuses[1]).to.equal(0); // 0 = SUCCESS
 
                 // Execute mixed batch
                 await serving.connect(provider1).settleFeesWithTEE([ownerSettlement, user1Settlement]);

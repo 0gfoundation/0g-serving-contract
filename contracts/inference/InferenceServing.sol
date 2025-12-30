@@ -520,17 +520,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
+    /// @notice Settle fees with TEE-signed settlement data
+    /// @param settlements Array of settlement data to process
+    /// @return statuses Array of settlement statuses (uint8), preserving one-to-one correspondence with input
+    /// @dev Status codes: 0=SUCCESS, 1=PARTIAL_SETTLEMENT, 2=PROVIDER_MISMATCH, 3=NO_TEE_SIGNER, 4=INVALID_NONCE, 5=INVALID_SIGNATURE
+    /// @dev Statuses array has same length as input, with statuses[i] corresponding to settlements[i]
+    /// @dev All settlement details are emitted via TEESettlementResult events
     function settleFeesWithTEE(
         TEESettlementData[] calldata settlements
     )
         external
         nonReentrant
-        returns (
-            address[] memory failedUsers,
-            SettlementStatus[] memory failureReasons,
-            address[] memory partialUsers,
-            uint256[] memory partialAmounts
-        )
+        returns (uint8[] memory statuses)
     {
         if (settlements.length == 0) {
             revert NoSettlementsProvided();
@@ -540,26 +541,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
 
         uint settlementsLength = settlements.length;
-        failedUsers = new address[](settlementsLength);
-        failureReasons = new SettlementStatus[](settlementsLength);
-        partialUsers = new address[](settlementsLength);
-        partialAmounts = new uint256[](settlementsLength);
-
-        uint failedCount = 0;
-        uint partialCount = 0;
+        statuses = new uint8[](settlementsLength);
         uint256 totalTransferAmount = 0;
 
         for (uint i = 0; i < settlementsLength; i++) {
             TEESettlementData calldata settlement = settlements[i];
 
             if (settlement.provider != msg.sender) {
-                _recordFailure(
-                    failedUsers,
-                    failureReasons,
-                    failedCount++,
-                    settlement.user,
-                    SettlementStatus.PROVIDER_MISMATCH
-                );
+                statuses[i] = uint8(SettlementStatus.PROVIDER_MISMATCH);
                 emit TEESettlementResult(settlement.user, SettlementStatus.PROVIDER_MISMATCH, settlement.totalFee);
                 continue;
             }
@@ -567,25 +556,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             (SettlementStatus status, uint256 unsettledAmount, uint256 settledAmount) = _processTEESettlement(
                 settlement
             );
+
+            statuses[i] = uint8(status);
             totalTransferAmount += settledAmount;
             emit TEESettlementResult(settlement.user, status, unsettledAmount);
-
-            if (status == SettlementStatus.SUCCESS) {
-                continue;
-            }
-
-            if (status == SettlementStatus.PARTIAL) {
-                _recordPartial(partialUsers, partialAmounts, partialCount++, settlement.user, unsettledAmount);
-                continue;
-            }
-            _recordFailure(failedUsers, failureReasons, failedCount++, settlement.user, status);
-        }
-
-        assembly {
-            mstore(failedUsers, failedCount)
-            mstore(failureReasons, failedCount)
-            mstore(partialUsers, partialCount)
-            mstore(partialAmounts, partialCount)
         }
 
         // Batch transfer all settled amounts at once
