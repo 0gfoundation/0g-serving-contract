@@ -46,6 +46,8 @@ library AccountLibrary {
     error RefundProcessed(address user, address provider, uint index);
     error RefundLocked(address user, address provider, uint index);
     error TooManyRefunds(address user, address provider);
+    error BatchSizeTooLarge(uint256 size, uint256 max);
+    error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -157,7 +159,9 @@ library AccountLibrary {
         address[] calldata users,
         address provider
     ) internal view returns (Account[] memory accounts) {
-        require(users.length <= 500, "Batch size too large (max 500)");
+        if (users.length > 500) {
+            revert BatchSizeTooLarge(users.length, 500);
+        }
         accounts = new Account[](users.length);
 
         for (uint i = 0; i < users.length; i++) {
@@ -232,7 +236,9 @@ library AccountLibrary {
 
         // Once acknowledged as true, can only be set back to false if balance is zero
         if (account.acknowledged && !acknowledged) {
-            require(account.balance == 0, "Cannot revoke acknowledgement with non-zero balance");
+            if (account.balance != 0) {
+                revert CannotRevokeWithNonZeroBalance(user, provider, account.balance);
+            }
         }
 
         account.acknowledged = acknowledged;

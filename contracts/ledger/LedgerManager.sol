@@ -106,6 +106,24 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     error ServiceNotRegistered(address serviceAddress);
     error ServiceNameExists(string serviceName);
     error InvalidServiceAddress(address serviceAddress);
+    error LedgerLocked();
+    error CallerNotRegisteredService(address caller);
+    error ServiceNotFound(address serviceAddress);
+    error MinimumDepositRequired(uint256 provided, uint256 required);
+    error AdditionalInfoTooLong(uint256 length, uint256 max);
+    error ZeroAmountNotAllowed();
+    error ZeroAddressNotAllowed();
+    error InsufficientAvailableBalance(uint256 available, uint256 required);
+    error TransferFailed();
+    error CallFailed();
+    error MustWithdrawAllFundsFirst(uint256 remainingBalance);
+    error ServiceTypeRequired();
+    error VersionRequired();
+    error ServiceAlreadyRegistered(address serviceAddress);
+    error ServiceMustImplementIServing(address serviceAddress);
+    error ServiceRegistryLimitReached(uint256 limit);
+    error NoRecommendedService(string serviceType);
+    error NoServicesRegistered();
 
     struct LedgerMap {
         EnumerableSet.Bytes32Set _keys;
@@ -118,7 +136,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     modifier withLedgerLock(address user) {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(user);
-        require(!$.ledgerMap._operationLocks[key], "Ledger locked for operation");
+        if ($.ledgerMap._operationLocks[key]) {
+            revert LedgerLocked();
+        }
         $.ledgerMap._operationLocks[key] = true;
         _;
         $.ledgerMap._operationLocks[key] = false;
@@ -143,7 +163,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
     modifier onlyServing() {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
-        require($.registeredServices[msg.sender].serviceAddress != address(0), "Caller is not a registered service");
+        if ($.registeredServices[msg.sender].serviceAddress == address(0)) {
+            revert CallerNotRegisteredService(msg.sender);
+        }
         _;
     }
 
@@ -174,7 +196,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     function getLedgerProviders(address user, string memory serviceName) public view returns (address[] memory) {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         address serviceAddress = $.serviceNameToAddress[serviceName];
-        require(serviceAddress != address(0), "Service not found");
+        if (serviceAddress == address(0)) {
+            revert ServiceNotFound(serviceAddress);
+        }
 
         // Use new serviceAddress-based mapping
         EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
@@ -188,8 +212,12 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function addLedger(string memory additionalInfo) external payable withLedgerLock(msg.sender) returns (uint, uint) {
-        require(msg.value >= MIN_ACCOUNT_BALANCE, "Minimum deposit of 3 0G required");
-        require(bytes(additionalInfo).length <= MAX_ADDITIONAL_INFO_LENGTH, "Additional info exceeds 4KB limit");
+        if (msg.value < MIN_ACCOUNT_BALANCE) {
+            revert MinimumDepositRequired(msg.value, MIN_ACCOUNT_BALANCE);
+        }
+        if (bytes(additionalInfo).length > MAX_ADDITIONAL_INFO_LENGTH) {
+            revert AdditionalInfoTooLong(bytes(additionalInfo).length, MAX_ADDITIONAL_INFO_LENGTH);
+        }
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(msg.sender);
         if (_contains($, key)) {
@@ -202,7 +230,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     /// @notice Update additional info for an existing ledger
     /// @param additionalInfo New additional info (max 4KB)
     function updateAdditionalInfo(string memory additionalInfo) external withLedgerLock(msg.sender) {
-        require(bytes(additionalInfo).length <= MAX_ADDITIONAL_INFO_LENGTH, "Additional info exceeds 4KB limit");
+        if (bytes(additionalInfo).length > MAX_ADDITIONAL_INFO_LENGTH) {
+            revert AdditionalInfoTooLong(bytes(additionalInfo).length, MAX_ADDITIONAL_INFO_LENGTH);
+        }
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         Ledger storage ledger = _get($, msg.sender);
         ledger.additionalInfo = additionalInfo;
@@ -215,14 +245,18 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
     // Internal function for deposit logic without modifier
     function _depositFundInternal(address user, uint256 amount) internal {
-        require(amount > 0, "Deposit amount must be greater than zero");
+        if (amount == 0) {
+            revert ZeroAmountNotAllowed();
+        }
 
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(user);
 
         // Create account if it doesn't exist (with empty additionalInfo, can be updated later via updateAdditionalInfo)
         if (!_contains($, key)) {
-            require(amount >= MIN_ACCOUNT_BALANCE, "Minimum deposit of 3 0G required for new account");
+            if (amount < MIN_ACCOUNT_BALANCE) {
+                revert MinimumDepositRequired(amount, MIN_ACCOUNT_BALANCE);
+            }
             _set($, key, user, amount, "");  // Empty additionalInfo by design
         } else {
             Ledger storage ledger = $.ledgerMap._values[key];
@@ -232,15 +266,21 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     }
 
     function depositFundFor(address recipient) external payable withLedgerLock(recipient) {
-        require(recipient != address(0), "Invalid recipient address");
-        require(msg.value > 0, "Zero-value deposit not allowed");
+        if (recipient == address(0)) {
+            revert ZeroAddressNotAllowed();
+        }
+        if (msg.value == 0) {
+            revert ZeroAmountNotAllowed();
+        }
 
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 key = _key(recipient);
 
         // Create account if it doesn't exist
         if (!_contains($, key)) {
-            require(msg.value >= MIN_ACCOUNT_BALANCE, "Minimum deposit of 3 0G required for new account");
+            if (msg.value < MIN_ACCOUNT_BALANCE) {
+                revert MinimumDepositRequired(msg.value, MIN_ACCOUNT_BALANCE);
+            }
             _set($, key, recipient, msg.value, "");
         } else {
             Ledger storage ledger = $.ledgerMap._values[key];
@@ -258,15 +298,16 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
         // Enforce minimum balance: must keep MIN_ACCOUNT_BALANCE or withdraw all
         uint remainingBalance = ledger.availableBalance - amount;
-        require(
-            remainingBalance == 0 || remainingBalance >= MIN_ACCOUNT_BALANCE,
-            "Must maintain minimum balance of 3 0G or withdraw all funds"
-        );
+        if (remainingBalance != 0 && remainingBalance < MIN_ACCOUNT_BALANCE) {
+            revert MinimumDepositRequired(remainingBalance, MIN_ACCOUNT_BALANCE);
+        }
 
         ledger.availableBalance -= amount;
         ledger.totalBalance -= amount;
         (bool success, ) = payable(msg.sender).call{value: amount}("");
-        require(success, "0G transfer failed");
+        if (!success) {
+            revert TransferFailed();
+        }
 
         // Auto-delete account if total balance reaches 0
         if (ledger.totalBalance == 0) {
@@ -288,7 +329,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
         // Dynamic service lookup
         address serviceAddress = $.serviceNameToAddress[serviceName];
-        require(serviceAddress != address(0), "Service not found");
+        if (serviceAddress == address(0)) {
+            revert ServiceNotFound(serviceAddress);
+        }
 
         ServiceInfo storage service = $.registeredServices[serviceAddress];
 
@@ -312,7 +355,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
             );
         } else {
             // New account - require minimum transfer amount
-            require(amount >= MIN_TRANSFER_AMOUNT, "Minimum 1 0G required for new sub account");
+            if (amount < MIN_TRANSFER_AMOUNT) {
+                revert MinimumDepositRequired(amount, MIN_TRANSFER_AMOUNT);
+            }
 
             // Use unified addAccount interface
             payload = abi.encodeWithSignature(
@@ -326,11 +371,15 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
             _addProviderToService($, msg.sender, serviceAddress, provider);
         }
 
-        require(ledger.availableBalance >= transferAmount, "Insufficient balance");
+        if (ledger.availableBalance < transferAmount) {
+            revert InsufficientAvailableBalance(ledger.availableBalance, transferAmount);
+        }
         ledger.availableBalance -= transferAmount;
 
         (bool success, ) = servingAddress.call{value: transferAmount}(payload);
-        require(success, "Call to child contract failed");
+        if (!success) {
+            revert CallFailed();
+        }
     }
 
     function retrieveFund(address[] memory providers, string memory serviceName) external withLedgerLock(msg.sender) {
@@ -341,7 +390,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
         // Dynamic service lookup
         address serviceAddress = $.serviceNameToAddress[serviceName];
-        require(serviceAddress != address(0), "Service not found");
+        if (serviceAddress == address(0)) {
+            revert ServiceNotFound(serviceAddress);
+        }
 
         ServiceInfo storage service = $.registeredServices[serviceAddress];
 
@@ -365,7 +416,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         Ledger storage ledger = _get($, msg.sender);
 
         // Safety check: ensure all funds have been withdrawn
-        require(ledger.totalBalance == 0, "Must withdraw all funds first");
+        if (ledger.totalBalance != 0) {
+            revert MustWithdrawAllFundsFirst(ledger.totalBalance);
+        }
 
         _deleteAllServiceAccounts($, msg.sender);
 
@@ -409,21 +462,34 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         string memory description
     ) external onlyOwner {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
-        require(serviceAddress != address(0), "Invalid service address");
-        require(bytes(serviceType).length > 0, "Service type required");
-        require(bytes(version).length > 0, "Version required");
-        require($.registeredServices[serviceAddress].serviceAddress == address(0), "Service already registered");
+        if (serviceAddress == address(0)) {
+            revert InvalidServiceAddress(serviceAddress);
+        }
+        if (bytes(serviceType).length == 0) {
+            revert ServiceTypeRequired();
+        }
+        if (bytes(version).length == 0) {
+            revert VersionRequired();
+        }
+        if ($.registeredServices[serviceAddress].serviceAddress != address(0)) {
+            revert ServiceAlreadyRegistered(serviceAddress);
+        }
 
         string memory fullName = string(abi.encodePacked(serviceType, "-", version));
-        require($.serviceNameToAddress[fullName] == address(0), "Service name already exists");
+        if ($.serviceNameToAddress[fullName] != address(0)) {
+            revert ServiceNameExists(fullName);
+        }
 
         // Check interface support
-        require(
-            serviceAddress.supportsInterface(type(IERC165).interfaceId),
-            "Service must support ERC165 interface detection"
-        );
-        require(serviceAddress.supportsInterface(SERVING_INTERFACE_ID), "Service must implement IServing interface");
-        require($.serviceAddresses.length() < MAX_SERVICES, "Service registry limit reached");
+        if (!serviceAddress.supportsInterface(type(IERC165).interfaceId)) {
+            revert ServiceMustImplementIServing(serviceAddress);
+        }
+        if (!serviceAddress.supportsInterface(SERVING_INTERFACE_ID)) {
+            revert ServiceMustImplementIServing(serviceAddress);
+        }
+        if ($.serviceAddresses.length() >= MAX_SERVICES) {
+            revert ServiceRegistryLimitReached(MAX_SERVICES);
+        }
 
         // Register service (default not recommended)
         $.registeredServices[serviceAddress] = ServiceInfo({
@@ -447,7 +513,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         string memory fullName = string(abi.encodePacked(serviceType, "-", version));
         address serviceAddress = $.serviceNameToAddress[fullName];
-        require(serviceAddress != address(0), "Service not found");
+        if (serviceAddress == address(0)) {
+            revert ServiceNotFound(serviceAddress);
+        }
 
         // Update per-type recommended pointer and clear previous recommendation if any (O(1))
         bytes32 tkey = keccak256(abi.encodePacked(serviceType));
@@ -492,7 +560,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         bytes32 tkey = keccak256(abi.encodePacked(serviceType));
         address addr = $.recommendedByType[tkey];
-        require(addr != address(0), "No recommended service found for this type");
+        if (addr == address(0)) {
+            revert NoRecommendedService(serviceType);
+        }
 
         ServiceInfo storage service = $.registeredServices[addr];
         return (service.version, addr);
@@ -553,7 +623,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
         // Get all registered services
         uint256 serviceCount = $.serviceAddresses.length();
-        require(serviceCount > 0, "No services registered");
+        if (serviceCount == 0) {
+            revert NoServicesRegistered();
+        }
 
         // Iterate through all services
         for (uint256 i = 0; i < serviceCount; i++) {
@@ -614,7 +686,10 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     function spendFund(address user, uint amount) external onlyServing withLedgerLock(user) {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
         Ledger storage ledger = _get($, user);
-        require((ledger.totalBalance - ledger.availableBalance) >= amount, "Insufficient balance");
+        uint256 locked = ledger.totalBalance - ledger.availableBalance;
+        if (locked < amount) {
+            revert InsufficientAvailableBalance(locked, amount);
+        }
         ledger.totalBalance -= amount;
         emit FundSpent(user, msg.sender, amount);
     }
