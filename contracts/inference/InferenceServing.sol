@@ -322,8 +322,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         $.accountMap.requestRefundAll(user, provider);
         Account memory account = $.accountMap.getAccount(user, provider);
-        if (account.refunds.length > 0) {
-            emit RefundRequested(user, provider, account.refunds.length - 1, block.timestamp);
+        if (account.validRefundsLength > 0) {
+            emit RefundRequested(user, provider, account.validRefundsLength - 1, block.timestamp);
         }
     }
 
