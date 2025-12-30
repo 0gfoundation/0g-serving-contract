@@ -93,7 +93,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
     // Events
     event ServiceRegistered(address indexed serviceAddress, string serviceName);
-    event RecommendedServiceUpdated(string indexed serviceType, string version, address serviceAddress);
+    event RecommendedServiceUpdated(string serviceType, string version, address serviceAddress);
     event LedgerInfoUpdated(address indexed user, string additionalInfo);
     event FundSpent(address indexed user, address indexed service, uint256 amount);
 
