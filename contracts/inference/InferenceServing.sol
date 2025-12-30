@@ -107,7 +107,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AllTokensRevoked(address indexed user, address indexed provider, uint newGeneration);
     event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
     event ContractInitialized(address indexed owner, uint256 lockTime, address ledgerAddress);
+
+    // Custom errors
     error InvalidTEESignature(string reason);
+    error LockTimeOutOfRange(uint256 lockTime, uint256 min, uint256 max);
+    error CallerNotLedger(address caller);
+    error LimitTooLarge(uint256 limit, uint256 max);
+    error InvalidAddress(address addr);
+    error TransferFailed();
+    error CannotAddStakeWhenUpdating();
+    error InsufficientStake(uint256 provided, uint256 required);
+    error NoSettlementsProvided();
+    error TooManySettlements(uint256 count, uint256 max);
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -125,7 +136,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function initialize(uint _locktime, address _ledgerAddress, address owner) public onlyInitializeOnce {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         _transferOwnership(owner);
-        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+        if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
+            revert LockTimeOutOfRange(_locktime, MIN_LOCKTIME, MAX_LOCKTIME);
+        }
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
@@ -134,13 +147,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     modifier onlyLedger() {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(msg.sender == $.ledgerAddress, "Caller is not the ledger contract");
+        if (msg.sender != $.ledgerAddress) {
+            revert CallerNotLedger(msg.sender);
+        }
         _;
     }
 
     function updateLockTime(uint _locktime) public onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+        if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
+            revert LockTimeOutOfRange(_locktime, MIN_LOCKTIME, MAX_LOCKTIME);
+        }
         uint256 oldLockTime = $.lockTime;
         $.lockTime = _locktime;
         emit LockTimeUpdated(oldLockTime, _locktime);
@@ -153,7 +170,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function getAllAccounts(uint offset, uint limit) public view returns (Account[] memory accounts, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit, 50);
+        }
         return $.accountMap.getAllAccounts(offset, (limit == 0 ? 50 : limit));
     }
 
@@ -163,7 +182,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint limit
     ) public view returns (Account[] memory accounts, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit, 50);
+        }
         return $.accountMap.getAccountsByProvider(provider, offset, (limit == 0 ? 50 : limit));
     }
 
@@ -173,7 +194,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint limit
     ) public view returns (Account[] memory accounts, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit, 50);
+        }
         return $.accountMap.getAccountsByUser(user, offset, (limit == 0 ? 50 : limit));
     }
 
@@ -249,8 +272,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
-        require(user != address(0), "Invalid user address");
-        require(provider != address(0), "Invalid provider address");
+        if (user == address(0)) {
+            revert InvalidAddress(user);
+        }
+        if (provider == address(0)) {
+            revert InvalidAddress(provider);
+        }
 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
@@ -267,8 +294,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
-        require(user != address(0), "Invalid user address");
-        require(provider != address(0), "Invalid provider address");
+        if (user == address(0)) {
+            revert InvalidAddress(user);
+        }
+        if (provider == address(0)) {
+            revert InvalidAddress(provider);
+        }
 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.depositFund(
@@ -305,7 +336,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
         if (totalAmount > 0) {
             (bool success, ) = payable(msg.sender).call{value: totalAmount}("");
-            require(success, "transfer to ledger failed");
+            if (!success) {
+                revert TransferFailed();
+            }
             emit BalanceUpdated(user, provider, balance, pendingRefund);
         }
     }
@@ -317,7 +350,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function getAllServices(uint offset, uint limit) public view returns (Service[] memory services, uint total) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit, 50);
+        }
         return $.serviceMap.getAllServices(offset, (limit == 0 ? 50 : limit));
     }
 
@@ -325,10 +360,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         if ($.providerStake[msg.sender] > 0) {
             // Updating existing service: cannot add more stake
-            require(msg.value == 0, "Cannot add more stake when updating service");
+            if (msg.value != 0) {
+                revert CannotAddStakeWhenUpdating();
+            }
         } else {
             // First time registration: require stake
-            require(msg.value >= MIN_PROVIDER_STAKE, "Minimum stake of 100 0G required");
+            if (msg.value < MIN_PROVIDER_STAKE) {
+                revert InsufficientStake(msg.value, MIN_PROVIDER_STAKE);
+            }
             $.providerStake[msg.sender] = msg.value;
 
             emit ProviderStaked(msg.sender, msg.value);
@@ -357,7 +396,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             $.providerStake[msg.sender] = 0;
 
             (bool success, ) = payable(msg.sender).call{value: stake}("");
-            require(success, "Stake return failed");
+            if (!success) {
+                revert TransferFailed();
+            }
 
             emit ProviderStakeReturned(msg.sender, stake);
         }
@@ -424,8 +465,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             uint256[] memory partialAmounts
         )
     {
-        require(settlements.length > 0, "No settlements provided");
-        require(settlements.length <= 50, "Too many settlements (max 50)");
+        if (settlements.length == 0) {
+            revert NoSettlementsProvided();
+        }
+        if (settlements.length > 50) {
+            revert TooManySettlements(settlements.length, 50);
+        }
 
         failedUsers = new address[](settlements.length);
         failureReasons = new SettlementStatus[](settlements.length);
@@ -482,8 +527,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             uint256[] memory partialAmounts
         )
     {
-        require(settlements.length > 0, "No settlements provided");
-        require(settlements.length <= 50, "Too many settlements in batch");
+        if (settlements.length == 0) {
+            revert NoSettlementsProvided();
+        }
+        if (settlements.length > 50) {
+            revert TooManySettlements(settlements.length, 50);
+        }
 
         failedUsers = new address[](settlements.length);
         failureReasons = new SettlementStatus[](settlements.length);
@@ -536,7 +585,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // Batch transfer all settled amounts at once
         if (totalTransferAmount > 0) {
             (bool success, ) = payable(msg.sender).call{value: totalTransferAmount}("");
-            require(success, "Transfer to provider failed");
+            if (!success) {
+                revert TransferFailed();
+            }
         }
     }
 
