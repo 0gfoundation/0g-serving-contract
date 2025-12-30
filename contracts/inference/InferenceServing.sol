@@ -36,8 +36,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     // @custom:storage-location erc7201:0g.serving.inference.v1.0
     struct InferenceServingStorage {
         uint lockTime;
-        address ledgerAddress;
-        ILedger ledger;
+        address ledgerManagerAddress;
+        ILedger ledgerManager;
         AccountLibrary.AccountMap accountMap;
         ServiceLibrary.ServiceMap serviceMap;
         mapping(address => uint) providerStake; // Service provider stake amounts
@@ -80,7 +80,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function ledgerAddress() public view returns (address) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        return $.ledgerAddress;
+        return $.ledgerManagerAddress;
     }
 
     event BalanceUpdated(address indexed user, address indexed provider, uint amount, uint pendingRefund);
@@ -140,14 +140,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert LockTimeOutOfRange(_locktime, MIN_LOCKTIME, MAX_LOCKTIME);
         }
         $.lockTime = _locktime;
-        $.ledgerAddress = _ledgerAddress;
-        $.ledger = ILedger(_ledgerAddress);
+        $.ledgerManagerAddress = _ledgerAddress;
+        $.ledgerManager = ILedger(_ledgerAddress);
         emit ContractInitialized(owner, _locktime, _ledgerAddress);
     }
 
-    modifier onlyLedger() {
+    modifier onlyLedgerManager() {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        if (msg.sender != $.ledgerAddress) {
+        if (msg.sender != $.ledgerManagerAddress) {
             revert CallerNotLedger(msg.sender);
         }
         _;
@@ -271,7 +271,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.accountMap.getPendingRefund(user, provider);
     }
 
-    function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
+    function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedgerManager {
         if (user == address(0)) {
             revert InvalidAddress(user);
         }
@@ -288,12 +288,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
-    function deleteAccount(address user, address provider) external onlyLedger {
+    function deleteAccount(address user, address provider) external onlyLedgerManager {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         $.accountMap.deleteAccount(user, provider);
     }
 
-    function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
+    function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedgerManager {
         if (user == address(0)) {
             revert InvalidAddress(user);
         }
@@ -318,7 +318,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
-    function requestRefundAll(address user, address provider) external onlyLedger {
+    function requestRefundAll(address user, address provider) external onlyLedgerManager {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         $.accountMap.requestRefundAll(user, provider);
         Account memory account = $.accountMap.getAccount(user, provider);
@@ -330,7 +330,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function processRefund(
         address user,
         address provider
-    ) external onlyLedger returns (uint totalAmount, uint balance, uint pendingRefund) {
+    ) external onlyLedgerManager returns (uint totalAmount, uint balance, uint pendingRefund) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (totalAmount, balance, pendingRefund) = $.accountMap.processRefund(user, provider, $.lockTime);
 
@@ -448,7 +448,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
 
         account.balance -= amount;
-        $.ledger.spendFund(account.user, amount);
+        $.ledgerManager.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
     }
 
