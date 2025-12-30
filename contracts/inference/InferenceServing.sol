@@ -54,6 +54,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     // Service provider stake requirement
     uint public constant MIN_PROVIDER_STAKE = 100 ether; // 100 0G minimum stake
 
+    // EIP-712 Domain Separator (manual implementation for upgradeable contracts)
+    bytes32 private constant DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    );
+
+    bytes32 private constant SETTLEMENT_TYPEHASH = keccak256(
+        "TEESettlement(bytes32 requestsHash,uint256 nonce,address provider,address user,uint256 totalFee)"
+    );
+
+    string private constant DOMAIN_NAME = "0G Inference Serving";
+    string private constant DOMAIN_VERSION = "1";
+
     function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
         assembly {
             $.slot := INFERENCE_SERVING_STORAGE_LOCATION
@@ -596,12 +608,28 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
+    /// @dev Calculate EIP-712 domain separator
+    /// @notice Computed dynamically to handle chain forks and proxy deployments correctly
+    function _domainSeparator() private view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                keccak256(bytes(DOMAIN_NAME)),
+                keccak256(bytes(DOMAIN_VERSION)),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
     function _verifySignature(
         TEESettlementData calldata settlement,
         address expectedSigner
-    ) private pure returns (bool) {
-        bytes32 messageHash = keccak256(
-            abi.encodePacked(
+    ) private view returns (bool) {
+        // Calculate EIP-712 structured hash
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SETTLEMENT_TYPEHASH,
                 settlement.requestsHash,
                 settlement.nonce,
                 settlement.provider,
@@ -610,10 +638,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             )
         );
 
-        bytes32 ethSignedHash = ECDSA.toEthSignedMessageHash(messageHash);
+        // Calculate EIP-712 digest with domain separator
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",  // EIP-712 prefix
+                _domainSeparator(),
+                structHash
+            )
+        );
 
         // ECDSA.tryRecover automatically checks s value malleability and returns error on invalid signature
-        (address recovered, ECDSA.RecoverError error) = ECDSA.tryRecover(ethSignedHash, settlement.signature);
+        (address recovered, ECDSA.RecoverError error) = ECDSA.tryRecover(digest, settlement.signature);
 
         // Return true only if recovery succeeded and address matches
         return error == ECDSA.RecoverError.NoError && recovered == expectedSigner;
