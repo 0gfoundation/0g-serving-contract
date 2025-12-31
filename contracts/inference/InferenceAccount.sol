@@ -433,22 +433,21 @@ library AccountLibrary {
         balance = account.balance;
     }
 
-    /// @dev Migration function: Clean up old processed refunds for specified accounts
+    /// @dev Migration function: Clean up old processed refunds for all users of a provider
     /// Should be called once after contract upgrade to clean all dirty data
     /// This is a one-time migration utility, can be removed after migration completes
     function migrateRefunds(
         AccountMap storage map,
-        address[] calldata users,
         address provider
     ) internal returns (uint cleanedCount) {
         cleanedCount = 0;
-        for (uint j = 0; j < users.length; j++) {
-            bytes32 key = _key(users[j], provider);
-            if (!_contains(map, key)) {
-                continue;
-            }
+        EnumerableSet.Bytes32Set storage providerKeys = map._providerIndex[provider];
+        uint totalAccounts = providerKeys.length();
 
+        for (uint j = 0; j < totalAccounts; j++) {
+            bytes32 key = providerKeys.at(j);
             Account storage account = map._values[key];
+
             if (account.validRefundsLength == 0) {
                 continue;
             }
