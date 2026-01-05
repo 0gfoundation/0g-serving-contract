@@ -1,11 +1,12 @@
 {
     "service": "inference",
     "version": "v1.0",
-    "compatibleClientSDKs": ["v0.6.1", "v0.6.2", "v0.6.3"],
+    "compatibleClientSDKs": ["v0.6.1", "v0.6.2", "v0.6.3", "v0.6.4"],
     "compatibleServingImages": [
         "ghcr.io/0gfoundation/0g-serving-broker@sha256:46918ea26e40909a7c24f9bbe4c66161ed9850bc8dd234f8aa7645aae5a30ad1",
         "ghcr.io/0gfoundation/0g-serving-broker@sha256:776f72a1fc1b38c8c1a8c2bd81bdddc6a37fb596b2d24467fc99daed341c2017",
         "ghcr.io/0gfoundation/0g-serving-broker@sha256:c7c6221f2a69954271cb32858736e8e15cd9541979bd091c30fc56b3fca203e9",
-        "ghcr.io/0gfoundation/0g-serving-broker@sha256:df8eea08abaa603446b51f0807e13f9ecb26203ded0f8c66f87764e2156e3d9f"
+        "ghcr.io/0gfoundation/0g-serving-broker@sha256:df8eea08abaa603446b51f0807e13f9ecb26203ded0f8c66f87764e2156e3d9f",
+        "ghcr.io/0gfoundation/0g-serving-broker@sha256:25ffd3c777773cc0688e23c44eb5ae4df8b0e0bf2c759ece1f95f09b62d580cd"
     ]
 }
