@@ -671,6 +671,13 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
                     }
                 }
 
+                // Safety check: verify all providers were migrated successfully
+                // This ensures data integrity before clearing old mapping
+                require(
+                    newProviders.length() == providerCount,
+                    "LedgerManager: provider count mismatch in migration"
+                );
+
                 // Clear old mapping to save storage
                 for (uint256 k = 0; k < providerCount; k++) {
                     oldProviders.remove(oldProviders.at(0)); // Always remove first element
