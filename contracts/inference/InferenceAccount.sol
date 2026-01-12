@@ -468,12 +468,20 @@ library AccountLibrary {
             }
 
             if (hasDirty) {
+                // Store old pendingRefund for safety check
+                uint oldPendingRefund = account.pendingRefund;
+
                 account.validRefundsLength = writeIndex;
                 // Recalculate pendingRefund after cleanup
                 uint newPendingRefund = 0;
                 for (uint i = 0; i < writeIndex; i++) {
                     newPendingRefund += account.refunds[i].amount;
                 }
+
+                // Safety check: ensure pendingRefund doesn't change
+                // If it changes, it indicates broken accounting (processed refunds should have amount=0)
+                require(oldPendingRefund == newPendingRefund, "InferenceAccount: accounting mismatch in migration");
+
                 account.pendingRefund = newPendingRefund;
                 cleanedCount++;
             }
