@@ -625,65 +625,88 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
 
     /// @notice One-time migration function to move data from old mapping to new mapping
     /// @dev Migrates userServiceProviders (serviceType-based) to userServiceProvidersByAddress (serviceAddress-based)
+    /// @dev Supports batch processing to prevent gas limit issues with large user bases
     /// @dev Can be called by owner after contract upgrade to migrate existing data
     /// @dev Safe to call multiple times - will only migrate data that hasn't been migrated yet
-    function migrateUserServiceProvidersMapping() external onlyOwner {
+    /// @param startUserIndex Index of user to start migration from (0-based, use 0 to start from beginning)
+    /// @param batchSize Maximum number of users to process (use 0 for all remaining users)
+    /// @return migratedCount Number of users that had data migrated
+    /// @return nextUserIndex Index to continue from in next batch (equals total users when complete)
+    function migrateUserServiceProvidersMapping(
+        uint256 startUserIndex,
+        uint256 batchSize
+    ) external onlyOwner returns (uint256 migratedCount, uint256 nextUserIndex) {
         LedgerManagerStorage storage $ = _getLedgerManagerStorage();
 
-        // Get all registered services
+        // Get the service address (expecting only one in legacy environment)
         uint256 serviceCount = $.serviceAddresses.length();
         if (serviceCount == 0) {
             revert NoServicesRegistered();
         }
+        address serviceAddress = $.serviceAddresses.at(0);
+        ServiceInfo storage service = $.registeredServices[serviceAddress];
+        string memory serviceType = service.serviceType;
 
-        // Iterate through all services
-        for (uint256 i = 0; i < serviceCount; i++) {
-            address serviceAddress = $.serviceAddresses.at(i);
-            ServiceInfo storage service = $.registeredServices[serviceAddress];
-            string memory serviceType = service.serviceType;
+        // Get all ledger users
+        uint256 ledgerCount = $.ledgerMap._keys.length();
+        if (ledgerCount == 0) {
+            return (0, 0);
+        }
 
-            // Get all ledger users
-            uint256 ledgerCount = $.ledgerMap._keys.length();
+        // Validate startUserIndex
+        require(startUserIndex < ledgerCount, "LedgerManager: startUserIndex out of bounds");
 
-            // For each user, migrate their providers for this service
-            for (uint256 j = 0; j < ledgerCount; j++) {
-                bytes32 ledgerKey = $.ledgerMap._keys.at(j);
-                address user = $.ledgerMap._values[ledgerKey].user;
+        // Calculate end index: if batchSize is 0, process all remaining
+        uint256 endUserIndex;
+        if (batchSize == 0 || batchSize > ledgerCount - startUserIndex) {
+            endUserIndex = ledgerCount;
+        } else {
+            endUserIndex = startUserIndex + batchSize;
+        }
 
-                // Get old mapping data
-                EnumerableSet.AddressSet storage oldProviders = $.userServiceProviders[user][serviceType];
+        migratedCount = 0;
 
-                // Skip if no data to migrate
-                if (oldProviders.length() == 0) {
-                    continue;
-                }
+        // Process batch of users
+        for (uint256 j = startUserIndex; j < endUserIndex; j++) {
+            bytes32 ledgerKey = $.ledgerMap._keys.at(j);
+            address user = $.ledgerMap._values[ledgerKey].user;
 
-                // Get new mapping reference
-                EnumerableSet.AddressSet storage newProviders = $.userServiceProvidersByAddress[user][serviceAddress];
+            // Get old mapping data
+            EnumerableSet.AddressSet storage oldProviders = $.userServiceProviders[user][serviceType];
 
-                // Copy providers to new mapping
-                uint256 providerCount = oldProviders.length();
-                for (uint256 k = 0; k < providerCount; k++) {
-                    address provider = oldProviders.at(k);
-                    // Only add if not already present (safe for multiple calls)
-                    if (!newProviders.contains(provider)) {
-                        newProviders.add(provider);
-                    }
-                }
+            // Skip if no data to migrate
+            if (oldProviders.length() == 0) {
+                continue;
+            }
 
-                // Safety check: verify all providers were migrated successfully
-                // This ensures data integrity before clearing old mapping
-                require(
-                    newProviders.length() == providerCount,
-                    "LedgerManager: provider count mismatch in migration"
-                );
+            // Get new mapping reference
+            EnumerableSet.AddressSet storage newProviders = $.userServiceProvidersByAddress[user][serviceAddress];
 
-                // Clear old mapping to save storage
-                for (uint256 k = 0; k < providerCount; k++) {
-                    oldProviders.remove(oldProviders.at(0)); // Always remove first element
+            // Copy providers to new mapping
+            uint256 providerCount = oldProviders.length();
+            for (uint256 k = 0; k < providerCount; k++) {
+                address provider = oldProviders.at(k);
+                // Only add if not already present (safe for multiple calls)
+                if (!newProviders.contains(provider)) {
+                    newProviders.add(provider);
                 }
             }
+
+            // Safety check: verify all providers were migrated successfully
+            require(
+                newProviders.length() == providerCount,
+                "LedgerManager: provider count mismatch in migration"
+            );
+
+            // Clear old mapping to save storage
+            for (uint256 k = 0; k < providerCount; k++) {
+                oldProviders.remove(oldProviders.at(0)); // Always remove first element
+            }
+
+            migratedCount++;
         }
+
+        nextUserIndex = endUserIndex;
     }
 
     // === Internal Helper Functions ===
