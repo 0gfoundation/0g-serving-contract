@@ -225,11 +225,19 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     /// @notice Migration function to clean up old processed refunds (one-time use after upgrade)
-    /// @param provider Provider address - will migrate all users associated with this provider
+    /// @dev Supports batch processing to prevent gas limit issues with large user bases
+    /// @param provider Provider address - will migrate users associated with this provider
+    /// @param startIndex Index to start migration from (0-based, use 0 to start from beginning)
+    /// @param batchSize Maximum number of accounts to process (use 0 for all remaining)
     /// @return cleanedCount Number of accounts that had dirty data cleaned
-    function migrateRefunds(address provider) external onlyOwner returns (uint cleanedCount) {
+    /// @return nextIndex Index to continue from in next batch (equals total when complete)
+    function migrateRefunds(
+        address provider,
+        uint startIndex,
+        uint batchSize
+    ) external onlyOwner returns (uint cleanedCount, uint nextIndex) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        return $.accountMap.migrateRefunds(provider);
+        return $.accountMap.migrateRefunds(provider, startIndex, batchSize);
     }
 
     function revokeToken(address provider, uint8 tokenId) external {

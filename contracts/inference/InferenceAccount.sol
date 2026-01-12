@@ -433,18 +433,38 @@ library AccountLibrary {
         balance = account.balance;
     }
 
-    /// @dev Migration function: Clean up old processed refunds for all users of a provider
+    /// @dev Migration function: Clean up old processed refunds for users of a provider
     /// Should be called once after contract upgrade to clean all dirty data
     /// This is a one-time migration utility, can be removed after migration completes
+    /// @param startIndex Index to start migration from (0-based, use 0 to start from beginning)
+    /// @param batchSize Maximum number of accounts to process (use 0 or type(uint).max for all remaining)
+    /// @return cleanedCount Number of accounts that had dirty data cleaned
+    /// @return nextIndex Index to continue from in next batch (equals totalAccounts when complete)
     function migrateRefunds(
         AccountMap storage map,
-        address provider
-    ) internal returns (uint cleanedCount) {
+        address provider,
+        uint startIndex,
+        uint batchSize
+    ) internal returns (uint cleanedCount, uint nextIndex) {
         cleanedCount = 0;
         EnumerableSet.Bytes32Set storage providerKeys = map._providerIndex[provider];
         uint totalAccounts = providerKeys.length();
 
-        for (uint j = 0; j < totalAccounts; j++) {
+        // Validate startIndex
+        if (totalAccounts == 0) {
+            return (0, 0);
+        }
+        require(startIndex < totalAccounts, "InferenceAccount: startIndex out of bounds");
+
+        // Calculate end index: if batchSize is 0, process all remaining
+        uint endIndex;
+        if (batchSize == 0 || batchSize > totalAccounts - startIndex) {
+            endIndex = totalAccounts;
+        } else {
+            endIndex = startIndex + batchSize;
+        }
+
+        for (uint j = startIndex; j < endIndex; j++) {
             bytes32 key = providerKeys.at(j);
             Account storage account = map._values[key];
 
@@ -486,6 +506,8 @@ library AccountLibrary {
                 cleanedCount++;
             }
         }
+
+        nextIndex = endIndex;
     }
 
     function _at(AccountMap storage map, uint index) internal view returns (Account storage) {
