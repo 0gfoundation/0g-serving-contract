@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0 <0.9.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
-import "../utils/Initializable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EnumerableMap} from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {Initializable} from "../utils/Initializable.sol";
 import "./FineTuningAccount.sol";
-import "../ledger/LedgerManager.sol";
+import {ILedger, IServing} from "../ledger/LedgerManager.sol";
 
 using AccountLibrary for AccountLibrary.AccountMap;
 import "./FineTuningService.sol";
@@ -44,6 +45,18 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     uint public constant MIN_LOCKTIME = 1 hours;
     uint public constant MAX_LOCKTIME = 7 days;
 
+    // EIP-712 Domain Separator (manual implementation for upgradeable contracts)
+    bytes32 private constant DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    );
+
+    bytes32 private constant SETTLEMENT_TYPEHASH = keccak256(
+        "FineTuningSettlement(string id,bytes encryptedSecret,bytes modelRootHash,uint256 nonce,address providerSigner,uint256 taskFee,address user)"
+    );
+
+    string private constant DOMAIN_NAME = "0G Fine-Tuning Serving";
+    string private constant DOMAIN_VERSION = "1";
+
     function _getFineTuningServingStorage() private pure returns (FineTuningServingStorage storage $) {
         assembly {
             $.slot := FINETUNING_SERVING_STORAGE_LOCATION
@@ -77,7 +90,29 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         bool occupied
     );
     event ServiceRemoved(address indexed user);
+    event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
+    event PenaltyPercentageUpdated(uint256 oldPercentage, uint256 newPercentage);
+    event ContractInitialized(address indexed owner, uint256 lockTime, address ledgerAddress, uint256 penaltyPercentage);
+    event AccountDeleted(address indexed user, address indexed provider);
+
     error InvalidVerifierInput(string reason);
+    error ProviderCannotBeUser();
+    error LockTimeOutOfRange(uint256 lockTime, uint256 min, uint256 max);
+    error InvalidLedgerAddress(address ledgerAddress);
+    error PenaltyPercentageTooHigh(uint256 percentage, uint256 max);
+
+    /**
+     * @dev Constructor that disables initialization on the logic contract.
+     * This prevents the initialize function from being called on the logic contract itself.
+     * Only proxy contracts can call initialize.
+     *
+     * This is the recommended approach for upgradeable contracts to prevent
+     * unauthorized initialization of the logic contract.
+     */
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     function initialize(
         uint _locktime,
@@ -86,15 +121,24 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint _penaltyPercentage
     ) public onlyInitializeOnce {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(_ledgerAddress != address(0) && _ledgerAddress.code.length > 0, "Invalid ledger address");
-        require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
-        require(_locktime <= 365 days, "lockTime too large");
         _transferOwnership(owner);
-        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+
+        if (_ledgerAddress == address(0) || _ledgerAddress.code.length == 0) {
+            revert InvalidLedgerAddress(_ledgerAddress);
+        }
+        if (_penaltyPercentage > 100) {
+            revert PenaltyPercentageTooHigh(_penaltyPercentage, 100);
+        }
+        if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
+            revert LockTimeOutOfRange(_locktime, MIN_LOCKTIME, MAX_LOCKTIME);
+        }
+
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
         $.penaltyPercentage = _penaltyPercentage;
+
+        emit ContractInitialized(owner, _locktime, _ledgerAddress, _penaltyPercentage);
     }
 
     modifier onlyLedger() {
@@ -105,15 +149,22 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     function updateLockTime(uint _locktime) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(_locktime <= 365 days, "lockTime too large");
-        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+        if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
+            revert LockTimeOutOfRange(_locktime, MIN_LOCKTIME, MAX_LOCKTIME);
+        }
+        uint oldLockTime = $.lockTime;
         $.lockTime = _locktime;
+        emit LockTimeUpdated(oldLockTime, _locktime);
     }
 
     function updatePenaltyPercentage(uint _penaltyPercentage) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
+        if (_penaltyPercentage > 100) {
+            revert PenaltyPercentageTooHigh(_penaltyPercentage, 100);
+        }
+        uint oldPercentage = $.penaltyPercentage;
         $.penaltyPercentage = _penaltyPercentage;
+        emit PenaltyPercentageUpdated(oldPercentage, _penaltyPercentage);
     }
 
     // user functions
@@ -170,6 +221,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
+        if (user == provider) revert ProviderCannotBeUser();
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
         emit BalanceUpdated(user, provider, balance, pendingRefund);
@@ -178,9 +230,11 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function deleteAccount(address user, address provider) external onlyLedger {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.deleteAccount(user, provider);
+        emit AccountDeleted(user, provider);
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
+        if (user == provider) revert ProviderCannotBeUser();
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.depositFund(
             user,
@@ -287,25 +341,28 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
         // Validate deliverable exists
         if (bytes(account.deliverables[verifierInput.id].id).length == 0) {
-            revert("Deliverable does not exist");
+            revert InvalidVerifierInput("deliverable does not exist");
         }
         Deliverable storage deliverable = account.deliverables[verifierInput.id];
         if (keccak256(deliverable.modelRootHash) != keccak256(verifierInput.modelRootHash)) {
             revert InvalidVerifierInput("model root hash mismatch");
         }
 
-        // Verify TEE signature
-        bool teePassed = verifierInput.verifySignature(account.providerSigner);
-        if (!teePassed) {
-            revert InvalidVerifierInput("TEE settlement validation failed");
+        // Verify EIP-712 signature with ECDSA.tryRecover for better security
+        if (!_verifySignature(verifierInput, account.providerSigner)) {
+            revert InvalidVerifierInput("EIP-712 signature verification failed");
         }
 
         uint fee = verifierInput.taskFee;
         if (deliverable.acknowledged) {
-            require(verifierInput.encryptedSecret.length != 0, "secret should not be empty");
+            if (verifierInput.encryptedSecret.length == 0) {
+                revert InvalidVerifierInput("secret should not be empty when deliverable is acknowledged");
+            }
             deliverable.encryptedSecret = verifierInput.encryptedSecret;
         } else {
-            require(verifierInput.encryptedSecret.length == 0, "secret should be empty");
+            if (verifierInput.encryptedSecret.length != 0) {
+                revert InvalidVerifierInput("secret should be empty when deliverable is not acknowledged");
+            }
             fee = (fee * $.penaltyPercentage) / 100;
         }
 
@@ -323,32 +380,96 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
                 revert InvalidVerifierInput("insufficient balance in pendingRefund");
             }
 
-            account.pendingRefund -= remainingFee;
+            // Process refunds from most recent to oldest (LIFO)
+            uint validLength = account.validRefundsLength;
 
-            // Optimized: Process from the end with early exit
-            uint refundsLength = account.refunds.length;
-            for (uint i = refundsLength; i > 0 && remainingFee > 0; i--) {
-                Refund storage refund = account.refunds[i - 1];
-                if (refund.processed) {
-                    continue;
-                }
+            for (uint i = validLength; i > 0 && remainingFee > 0; ) {
+                unchecked { --i; }
+                Refund storage refund = account.refunds[i];
 
                 if (refund.amount <= remainingFee) {
+                    // Fully consume this refund
                     remainingFee -= refund.amount;
                     refund.amount = 0;
-                    refund.processed = true;
+                    --validLength;
                 } else {
+                    // Partially consume this refund
                     refund.amount -= remainingFee;
                     remainingFee = 0;
-                    break;
                 }
             }
+
+            // Update validRefundsLength (shrink boundary)
+            account.validRefundsLength = validLength;
+
+            // Recalculate pendingRefund from active refunds
+            uint newPendingRefund = 0;
+            for (uint i = 0; i < validLength; i++) {
+                newPendingRefund += account.refunds[i].amount;
+            }
+            account.pendingRefund = newPendingRefund;
         }
 
         account.balance -= amount;
-        $.ledger.spendFund(account.user, amount);
+
+        // Emit event BEFORE external calls to prevent reentrancy-caused ordering issues
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
+
+        // External calls at the end
+        $.ledger.spendFund(account.user, amount);
         payable(msg.sender).transfer(amount);
+    }
+
+    /// @dev Calculate EIP-712 domain separator
+    /// @notice Computed dynamically to handle chain forks and proxy deployments correctly
+    function _domainSeparator() private view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                keccak256(bytes(DOMAIN_NAME)),
+                keccak256(bytes(DOMAIN_VERSION)),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    /// @dev Verify EIP-712 signature for fine-tuning settlement
+    /// @param input The verifier input containing all settlement data and signature
+    /// @param expectedSigner The expected signer address (provider's TEE signer)
+    /// @return bool True if signature is valid and matches expected signer
+    function _verifySignature(
+        VerifierInput calldata input,
+        address expectedSigner
+    ) private view returns (bool) {
+        // Calculate EIP-712 structured hash
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SETTLEMENT_TYPEHASH,
+                keccak256(bytes(input.id)),
+                keccak256(input.encryptedSecret),
+                keccak256(input.modelRootHash),
+                input.nonce,
+                input.providerSigner,
+                input.taskFee,
+                input.user
+            )
+        );
+
+        // Calculate EIP-712 digest with domain separator
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",  // EIP-712 prefix
+                _domainSeparator(),
+                structHash
+            )
+        );
+
+        // ECDSA.tryRecover automatically checks s value malleability and returns error on invalid signature
+        (address recovered, ECDSA.RecoverError error) = ECDSA.tryRecover(digest, input.signature);
+
+        // Return true only if recovery succeeded and address matches
+        return error == ECDSA.RecoverError.NoError && recovered == expectedSigner;
     }
 
     // === ERC165 Support ===

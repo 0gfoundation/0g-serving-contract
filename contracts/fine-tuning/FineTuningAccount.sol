@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Unlicense
 pragma solidity >=0.8.0 <0.9.0;
 
-import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 // Constants
 uint constant MAX_DELIVERABLES_PER_ACCOUNT = 20;
@@ -69,7 +69,6 @@ library AccountLibrary {
 
     // Constants for optimization
     uint constant MAX_REFUNDS_PER_ACCOUNT = 5;
-    uint constant REFUND_CLEANUP_THRESHOLD = 3;
     uint constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
 
     error AccountNotExists(address user, address provider);
@@ -80,6 +79,8 @@ library AccountLibrary {
     error RefundLocked(address user, address provider, uint index);
     error TooManyRefunds(address user, address provider);
     error AdditionalInfoTooLong();
+    error BatchSizeTooLarge(uint256 size, uint256 max);
+    error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -136,8 +137,8 @@ library AccountLibrary {
             return (new AccountSummary[](0), total);
         }
 
-        uint end = offset + limit;
-        if (limit == 0 || end > total) {
+        uint end = limit == 0 ? total : offset + limit;
+        if (end > total) {
             end = total;
         }
 
@@ -245,10 +246,13 @@ library AccountLibrary {
         address[] calldata users,
         address provider
     ) internal view returns (AccountSummary[] memory accounts) {
-        require(users.length <= 500, "Batch size too large (max 500)");
-        accounts = new AccountSummary[](users.length);
+        if (users.length > 500) {
+            revert BatchSizeTooLarge(users.length, 500);
+        }
+        uint usersLength = users.length;
+        accounts = new AccountSummary[](usersLength);
 
-        for (uint i = 0; i < users.length; i++) {
+        for (uint i = 0; i < usersLength; i++) {
             bytes32 key = _key(users[i], provider);
             if (_contains(map, key)) {
                 Account storage fullAccount = map._values[key];
@@ -320,47 +324,43 @@ library AccountLibrary {
     ) internal returns (uint, uint) {
         Account storage account = _get(map, user, provider);
 
-        if (cancelRetrievingAmount > 0 && account.refunds.length > 0) {
+        if (cancelRetrievingAmount > 0 && account.validRefundsLength > 0) {
+            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
             uint remainingCancel = cancelRetrievingAmount;
             uint newPendingRefund = account.pendingRefund;
 
-            // Process refunds in-place to avoid memory allocation
+            // Use swap-and-shrink: process active refunds and compact (LIFO - most recent first)
             uint writeIndex = 0;
-            for (uint i = 0; i < account.refunds.length; i++) {
+            for (uint i = 0; i < account.validRefundsLength; i++) {
                 Refund storage refund = account.refunds[i];
 
-                if (refund.processed) {
-                    continue;
-                }
-
                 if (remainingCancel >= refund.amount) {
+                    // Fully cancel this refund - skip it (don't write back)
                     remainingCancel -= refund.amount;
                     newPendingRefund -= refund.amount;
-                    refund.processed = true; // Mark as processed instead of removing
                 } else if (remainingCancel > 0) {
+                    // Partially cancel this refund - keep with reduced amount
                     refund.amount -= remainingCancel;
                     newPendingRefund -= remainingCancel;
                     remainingCancel = 0;
-                }
-
-                // Keep unprocessed refunds
-                if (!refund.processed && i != writeIndex) {
-                    account.refunds[writeIndex] = refund;
-                    account.refunds[writeIndex].index = writeIndex;
+                    // Swap to writeIndex if needed
+                    if (i != writeIndex) {
+                        account.refunds[writeIndex] = refund;
+                        account.refunds[writeIndex].index = writeIndex;
+                    }
                     writeIndex++;
-                } else if (!refund.processed) {
+                } else {
+                    // Keep this refund unchanged
+                    if (i != writeIndex) {
+                        account.refunds[writeIndex] = refund;
+                        account.refunds[writeIndex].index = writeIndex;
+                    }
                     writeIndex++;
                 }
             }
 
-            // Update validRefundsLength after cancelling refunds
+            // Shrink active boundary (no pop needed - just adjust boundary)
             account.validRefundsLength = writeIndex;
-
-            // Cleanup if needed
-            if (writeIndex < account.refunds.length) {
-                _cleanupRefunds(account, writeIndex);
-            }
-
             account.pendingRefund = newPendingRefund;
         }
 
@@ -435,7 +435,7 @@ library AccountLibrary {
     ) internal returns (uint totalAmount, uint balance, uint pendingRefund) {
         Account storage account = _get(map, user, provider);
 
-        if (account.refunds.length == 0) {
+        if (account.validRefundsLength == 0) {
             return (0, account.balance, account.pendingRefund);
         }
 
@@ -443,21 +443,19 @@ library AccountLibrary {
         pendingRefund = 0;
         uint writeIndex = 0;
         uint currentTime = block.timestamp;
+        uint validLength = account.validRefundsLength;
 
-        // Process refunds in-place
-        for (uint i = 0; i < account.refunds.length; i++) {
+        // Process refunds in-place, only process active refunds
+        for (uint i = 0; i < validLength; i++) {
             Refund storage refund = account.refunds[i];
 
-            if (refund.processed) {
-                continue;
-            }
-
             if (currentTime >= refund.createdAt + lockTime) {
+                // Refund is unlocked, process it
                 totalAmount += refund.amount;
-                refund.processed = true; // Mark as processed
+                // Don't write back (effectively removes it)
             } else {
+                // Refund still locked, keep it
                 pendingRefund += refund.amount;
-                // Keep unprocessed refunds
                 if (i != writeIndex) {
                     account.refunds[writeIndex] = refund;
                     account.refunds[writeIndex].index = writeIndex;
@@ -466,24 +464,8 @@ library AccountLibrary {
             }
         }
 
-        // Update valid refunds length
+        // Update valid refunds length (shrink boundary)
         account.validRefundsLength = writeIndex;
-
-        // Clean up or mark dirty data
-        if (writeIndex < account.refunds.length) {
-            uint dirtyCount = account.refunds.length - writeIndex;
-
-            if (dirtyCount >= REFUND_CLEANUP_THRESHOLD) {
-                // Many dirty entries: physical cleanup is more efficient
-                _cleanupRefunds(account, writeIndex);
-            } else {
-                // Few dirty entries: mark as processed to prevent duplicate processing
-                for (uint i = writeIndex; i < account.refunds.length; i++) {
-                    account.refunds[i].processed = true;
-                }
-            }
-        }
-
         account.balance -= totalAmount;
         account.pendingRefund = pendingRefund;
         balance = account.balance;
@@ -595,8 +577,9 @@ library AccountLibrary {
         }
 
         ids = new string[](count);
+        uint maxDeliverables = MAX_DELIVERABLES_PER_ACCOUNT;
 
-        if (count < MAX_DELIVERABLES_PER_ACCOUNT) {
+        if (count < maxDeliverables) {
             // Array not full yet, deliverables are in chronological order from index 0
             for (uint i = 0; i < count; i++) {
                 ids[i] = account.deliverableIds[i];
@@ -605,7 +588,7 @@ library AccountLibrary {
             // Array is full, need to reorder starting from the oldest (at head position)
             uint head = account.deliverablesHead;
             for (uint i = 0; i < count; i++) {
-                uint sourceIndex = (head + i) % MAX_DELIVERABLES_PER_ACCOUNT;
+                uint sourceIndex = (head + i) % maxDeliverables;
                 ids[i] = account.deliverableIds[sourceIndex];
             }
         }
@@ -620,24 +603,15 @@ library AccountLibrary {
         address provider
     ) internal view returns (Deliverable[] memory deliverables) {
         string[] memory ids = getDeliverableIds(map, user, provider);
-        deliverables = new Deliverable[](ids.length);
+        uint idsLength = ids.length;
+        deliverables = new Deliverable[](idsLength);
 
         Account storage account = _get(map, user, provider);
-        for (uint i = 0; i < ids.length; i++) {
+        for (uint i = 0; i < idsLength; i++) {
             deliverables[i] = account.deliverables[ids[i]];
         }
 
         return deliverables;
-    }
-
-    // Helper functions
-
-    function _cleanupRefunds(Account storage account, uint keepCount) private {
-        // Resize array to remove processed refunds
-        uint currentLength = account.refunds.length;
-        for (uint i = currentLength; i > keepCount; i--) {
-            account.refunds.pop();
-        }
     }
 
     // common functions
