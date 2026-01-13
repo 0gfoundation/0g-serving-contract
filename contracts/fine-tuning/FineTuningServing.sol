@@ -78,6 +78,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     );
     event ServiceRemoved(address indexed user);
     event AccountDeleted(address indexed user, address indexed provider, uint256 refundedAmount);
+    event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
 
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
@@ -127,13 +128,18 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     /// @notice Updates the lock time for refunds
-    /// @param _locktime The new lock time
+    /// @dev MED-5: This change applies immediately to ALL pending refunds
+    /// @dev The new lockTime will be used when processing any refund, regardless of when it was created
+    /// @dev Owner should exercise caution as this affects users' expectations for refund timing
+    /// @param _locktime The new lock time (must be between MIN_LOCKTIME and MAX_LOCKTIME)
     function updateLockTime(uint _locktime) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
             revert LockTimeOutOfRange(_locktime);
         }
+        uint256 oldLockTime = $.lockTime;
         $.lockTime = _locktime;
+        emit LockTimeUpdated(oldLockTime, _locktime);
     }
 
     /// @notice Updates the penalty percentage for unacknowledged deliverables
