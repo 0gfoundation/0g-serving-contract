@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 // Constants
 uint constant MAX_DELIVERABLES_PER_ACCOUNT = 20;
+uint constant MAX_DELIVERABLE_ID_LENGTH = 256; // HIGH-5 FIX: Max length for deliverable IDs
 
 struct Account {
     address user;
@@ -72,6 +73,7 @@ library AccountLibrary {
     uint constant REFUND_CLEANUP_THRESHOLD = 3;
     uint constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
 
+    // Custom errors for gas efficiency (GAS-1 optimization)
     error AccountNotExists(address user, address provider);
     error AccountExists(address user, address provider);
     error InsufficientBalance(address user, address provider);
@@ -80,6 +82,10 @@ library AccountLibrary {
     error RefundLocked(address user, address provider, uint index);
     error TooManyRefunds(address user, address provider);
     error AdditionalInfoTooLong();
+    error ProviderSignerZeroAddress();
+    error DeliverableNotExists(string id);
+    error DeliverableAlreadyExists(string id);
+    error DeliverableIdInvalidLength(uint256 length);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -489,12 +495,23 @@ library AccountLibrary {
         balance = account.balance;
     }
 
+    /// @notice Allows user to acknowledge a provider's signing address for TEE verification
+    /// @param map The account map storage
+    /// @param user The user address
+    /// @param provider The provider address
+    /// @param providerSigner The provider's TEE signer address
+    /// @dev HIGH-4 FIX: Added zero-address validation to prevent setting invalid signer
     function acknowledgeProviderSigner(
         AccountMap storage map,
         address user,
         address provider,
         address providerSigner
     ) internal {
+        // HIGH-4 FIX: Validate providerSigner is not zero address
+        if (providerSigner == address(0)) {
+            revert ProviderSignerZeroAddress();
+        }
+
         if (!_contains(map, _key(user, provider))) {
             revert AccountNotExists(user, provider);
         }
@@ -515,7 +532,7 @@ library AccountLibrary {
 
         // Check if deliverable exists
         if (bytes(account.deliverables[id].id).length == 0) {
-            revert("Deliverable does not exist");
+            revert DeliverableNotExists(id);
         }
 
         // Mark as acknowledged
@@ -524,6 +541,13 @@ library AccountLibrary {
 
     // provider functions
 
+    /// @notice Adds a new deliverable to a user-provider account
+    /// @param map The account map storage
+    /// @param user The user address
+    /// @param provider The provider address
+    /// @param id The unique deliverable identifier
+    /// @param modelRootHash The model root hash
+    /// @dev HIGH-5 FIX: Added deliverable ID length validation to prevent DoS attacks
     function addDeliverable(
         AccountMap storage map,
         address user,
@@ -531,6 +555,12 @@ library AccountLibrary {
         string calldata id,
         bytes memory modelRootHash
     ) internal {
+        // HIGH-5 FIX: Validate deliverable ID length to prevent DoS via excessive gas consumption
+        uint256 idLength = bytes(id).length;
+        if (idLength == 0 || idLength > MAX_DELIVERABLE_ID_LENGTH) {
+            revert DeliverableIdInvalidLength(idLength);
+        }
+
         if (!_contains(map, _key(user, provider))) {
             revert AccountNotExists(user, provider);
         }
@@ -538,7 +568,7 @@ library AccountLibrary {
 
         // Check if ID already exists
         if (bytes(account.deliverables[id].id).length != 0) {
-            revert("Deliverable ID already exists");
+            revert DeliverableAlreadyExists(id);
         }
 
         // Create new deliverable
@@ -576,7 +606,7 @@ library AccountLibrary {
     ) internal view returns (Deliverable memory) {
         Account storage account = _get(map, user, provider);
         if (bytes(account.deliverables[id].id).length == 0) {
-            revert("Deliverable does not exist");
+            revert DeliverableNotExists(id);
         }
         return account.deliverables[id];
     }
