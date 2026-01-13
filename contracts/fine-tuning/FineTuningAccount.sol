@@ -86,6 +86,7 @@ library AccountLibrary {
     error DeliverableNotExists(string id);
     error DeliverableAlreadyExists(string id);
     error DeliverableIdInvalidLength(uint256 length);
+    error PreviousDeliverableNotAcknowledged(string id);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -582,12 +583,13 @@ library AccountLibrary {
     // provider functions
 
     /// @notice Adds a new deliverable to a user-provider account
+    /// @dev MED-4 FIX: Enforces serial task execution - previous deliverable must be acknowledged
+    /// @dev HIGH-5 FIX: Added deliverable ID length validation to prevent DoS attacks
     /// @param map The account map storage
     /// @param user The user address
     /// @param provider The provider address
     /// @param id The unique deliverable identifier
     /// @param modelRootHash The model root hash
-    /// @dev HIGH-5 FIX: Added deliverable ID length validation to prevent DoS attacks
     function addDeliverable(
         AccountMap storage map,
         address user,
@@ -611,6 +613,27 @@ library AccountLibrary {
             revert DeliverableAlreadyExists(id);
         }
 
+        // MED-4 FIX: Enforce serial task execution
+        // BUSINESS RULE: Tasks must be completed sequentially
+        // Only allow new deliverable if previous one is acknowledged or no deliverables exist
+        // This prevents adding new tasks while previous ones are still pending
+        if (account.deliverablesCount > 0) {
+            // Get the most recent deliverable ID
+            uint latestIndex;
+            if (account.deliverablesCount == MAX_DELIVERABLES_PER_ACCOUNT) {
+                // Array is full, latest is right before head (circular)
+                latestIndex = (account.deliverablesHead + MAX_DELIVERABLES_PER_ACCOUNT - 1) % MAX_DELIVERABLES_PER_ACCOUNT;
+            } else {
+                // Array not full, latest is at count - 1
+                latestIndex = account.deliverablesCount - 1;
+            }
+
+            string memory latestId = account.deliverableIds[latestIndex];
+            if (!account.deliverables[latestId].acknowledged) {
+                revert PreviousDeliverableNotAcknowledged(latestId);
+            }
+        }
+
         // Create new deliverable
         Deliverable memory deliverable = Deliverable({
             id: id,
@@ -625,7 +648,10 @@ library AccountLibrary {
             account.deliverableIds[account.deliverablesCount] = id;
             account.deliverablesCount++;
         } else {
-            // Array is full, remove oldest and add new one
+            // Array is full (20 deliverables), use FIFO eviction strategy
+            // SAFETY: Due to serial task validation above, all older deliverables
+            // must be acknowledged before we can add this new one. Therefore,
+            // the oldest deliverable is guaranteed to be acknowledged and safe to evict.
             string memory oldestId = account.deliverableIds[account.deliverablesHead];
             delete account.deliverables[oldestId]; // Remove from mapping
 
