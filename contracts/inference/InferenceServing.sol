@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.8.22 <0.9.0;
+pragma solidity 0.8.22;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EnumerableMap} from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
@@ -107,6 +107,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AllTokensRevoked(address indexed user, address indexed provider, uint newGeneration);
     event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
     event ContractInitialized(address indexed owner, uint256 lockTime, address ledgerAddress);
+    event RefundsMigrated(
+        address indexed user,
+        address indexed provider,
+        uint256 migratedCount,
+        uint256 newValidLength
+    );
+    event AccountDeleted(
+        address indexed user,
+        address indexed provider,
+        uint256 refundedAmount
+    );
 
     // Custom errors
     error InvalidTEESignature(string reason);
@@ -119,6 +130,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error InsufficientStake(uint256 provided, uint256 required);
     error NoSettlementsProvided();
     error TooManySettlements(uint256 count, uint256 max);
+    error ProviderCannotBeUser();
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -237,7 +249,20 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint batchSize
     ) external onlyOwner returns (uint cleanedCount, uint nextIndex) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        return $.accountMap.migrateRefunds(provider, startIndex, batchSize);
+        (
+            uint cleaned,
+            uint next,
+            address[] memory users,
+            uint[] memory counts,
+            uint[] memory validLengths
+        ) = $.accountMap.migrateRefunds(provider, startIndex, batchSize);
+
+        // Emit event for each migrated account
+        for (uint i = 0; i < cleaned; i++) {
+            emit RefundsMigrated(users[i], provider, counts[i], validLengths[i]);
+        }
+
+        return (cleaned, next);
     }
 
     function revokeToken(address provider, uint8 tokenId) external {
@@ -285,6 +310,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (provider == address(0)) {
             revert InvalidAddress(provider);
         }
+        if (user == provider) {
+            revert ProviderCannotBeUser();
+        }
 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
@@ -297,7 +325,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     function deleteAccount(address user, address provider) external onlyLedgerManager {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        $.accountMap.deleteAccount(user, provider);
+        uint deletedBalance = $.accountMap.deleteAccount(user, provider);
+        emit AccountDeleted(user, provider, deletedBalance);
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedgerManager {
@@ -306,6 +335,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         if (provider == address(0)) {
             revert InvalidAddress(provider);
+        }
+        if (user == provider) {
+            revert ProviderCannotBeUser();
         }
 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
@@ -417,45 +449,37 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
+    /// @dev Settle fees by canceling refunds in LIFO order (most recent first)
+    /// @dev Invariant: amount is expected to be <= account.balance
+    /// @dev Refunds are processed in LIFO order; validRefundsLength tracks active refunds
     function _settleFees(Account storage account, uint amount) private {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
 
         if (amount > (account.balance - account.pendingRefund)) {
-            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
-            uint remainingFee = amount - (account.balance - account.pendingRefund);
-            account.pendingRefund -= remainingFee;
+            // Need to cancel some refunds to cover the fee
+            uint amountFromRefunds = amount - (account.balance - account.pendingRefund);
+            uint remainingToDeduct = amountFromRefunds;
+            uint validLength = account.validRefundsLength;
 
-            // Use swap-and-shrink: process refunds from end to start
-            // Process from end to prioritize newer refunds for cancellation
-            uint writeIndex = 0;
-            bool[] memory shouldCancel = new bool[](account.validRefundsLength);
+            // Single pass: process refunds from end to start (LIFO - most recent first)
+            for (uint i = validLength; i > 0 && remainingToDeduct > 0; ) {
+                unchecked { --i; }
+                Refund storage refund = account.refunds[i];
 
-            // First pass: mark which refunds to cancel (from end to start)
-            for (int i = int(account.validRefundsLength) - 1; i >= 0 && remainingFee > 0; i--) {
-                Refund storage refund = account.refunds[uint(i)];
-
-                if (refund.amount <= remainingFee) {
-                    remainingFee -= refund.amount;
-                    shouldCancel[uint(i)] = true;
+                if (refund.amount <= remainingToDeduct) {
+                    // Fully cancel this refund
+                    remainingToDeduct -= refund.amount;
+                    refund.amount = 0;
+                    --validLength;
                 } else {
-                    refund.amount -= remainingFee;
-                    remainingFee = 0;
+                    // Partially cancel this refund
+                    refund.amount -= remainingToDeduct;
+                    remainingToDeduct = 0;
                 }
             }
 
-            // Second pass: compact array keeping non-cancelled refunds
-            for (uint i = 0; i < account.validRefundsLength; i++) {
-                if (!shouldCancel[i]) {
-                    if (i != writeIndex) {
-                        account.refunds[writeIndex] = account.refunds[i];
-                        account.refunds[writeIndex].index = writeIndex;
-                    }
-                    writeIndex++;
-                }
-            }
-
-            // Shrink active boundary (no pop needed - just adjust boundary)
-            account.validRefundsLength = writeIndex;
+            account.validRefundsLength = validLength;
+            account.pendingRefund -= amountFromRefunds;
         }
 
         account.balance -= amount;
