@@ -179,7 +179,7 @@ describe("Fine tuning serving", () => {
         });
 
         it("should enforce pagination limits", async () => {
-            await expect(serving.getAllAccounts(0, 51)).to.be.revertedWith("Limit too large");
+            await expect(serving.getAllAccounts(0, 51)).to.be.revertedWithCustomError(serving, "LimitTooLarge").withArgs(51);
         });
 
         it("should get accounts by provider", async () => {
@@ -255,8 +255,8 @@ describe("Fine tuning serving", () => {
         });
 
         it("should enforce pagination limits", async () => {
-            await expect(serving.getAccountsByProvider(provider1Address, 0, 51)).to.be.revertedWith("Limit too large");
-            await expect(serving.getAccountsByUser(ownerAddress, 0, 51)).to.be.revertedWith("Limit too large");
+            await expect(serving.getAccountsByProvider(provider1Address, 0, 51)).to.be.revertedWithCustomError(serving, "LimitTooLarge").withArgs(51);
+            await expect(serving.getAccountsByUser(ownerAddress, 0, 51)).to.be.revertedWithCustomError(serving, "LimitTooLarge").withArgs(51);
         });
     });
 
@@ -281,9 +281,6 @@ describe("Fine tuning serving", () => {
     });
 
     describe("Refund Array Optimization", () => {
-        // Constants from FineTuningAccount contract
-        const MAX_REFUNDS_PER_ACCOUNT = 5;
-
         beforeEach(async () => {
             // Setup: Transfer funds to ensure we have a clean test account
             // After setup: balance=2.5 ether (2 from initial + 0.5 new), pendingRefund=0, refunds=[], validRefundsLength=0
@@ -480,7 +477,7 @@ describe("Fine tuning serving", () => {
                 signature: "",
             };
 
-            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput);
+            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
         });
 
         it("should succeed", async () => {
@@ -514,9 +511,10 @@ describe("Fine tuning serving", () => {
 
         it("should failed due to no secret", async () => {
             verifierInput.encryptedSecret = "0x";
-            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput);
-            await expect(serving.connect(provider1).settleFees(verifierInput)).to.be.revertedWith(
-                "secret should not be empty"
+            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
+            await expect(serving.connect(provider1).settleFees(verifierInput)).to.be.revertedWithCustomError(
+                serving,
+                "SecretShouldNotBeEmpty"
             );
         });
     });
@@ -544,7 +542,7 @@ describe("Fine tuning serving", () => {
                 signature: "",
             };
 
-            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput);
+            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
         });
 
         it("should succeed", async () => {
@@ -560,9 +558,10 @@ describe("Fine tuning serving", () => {
 
         it("should failed due to secret", async () => {
             verifierInput.encryptedSecret = encryptedSecret;
-            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput);
-            await expect(serving.connect(provider1).settleFees(verifierInput)).to.be.revertedWith(
-                "secret should be empty"
+            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
+            await expect(serving.connect(provider1).settleFees(verifierInput)).to.be.revertedWithCustomError(
+                serving,
+                "SecretShouldBeEmpty"
             );
         });
     });
@@ -572,11 +571,16 @@ describe("Fine tuning serving", () => {
         const MAX_DELIVERABLES_PER_ACCOUNT = 20;
 
         it("should allow adding deliverables up to the limit", async () => {
-            // Add deliverables up to the limit
+            // MED-4: Must acknowledge provider signer before adding deliverables
+            await serving.acknowledgeProviderSigner(provider1, provider1Signer);
+
+            // Add deliverables up to the limit (MED-4: must acknowledge each before adding next)
             for (let i = 0; i < MAX_DELIVERABLES_PER_ACCOUNT; i++) {
                 const deliverableId = ethers.hexlify(ethers.randomBytes(32));
                 const modelRootHash = ethers.hexlify(ethers.randomBytes(32));
                 await serving.connect(provider1).addDeliverable(ownerAddress, deliverableId, modelRootHash);
+                // MED-4: Acknowledge immediately to allow adding next deliverable
+                await serving.acknowledgeDeliverable(provider1, deliverableId);
             }
 
             const account = await serving.getAccount(ownerAddress, provider1);
@@ -584,17 +588,22 @@ describe("Fine tuning serving", () => {
         });
 
         it("should use circular array strategy when adding deliverables beyond the limit", async () => {
+            // MED-4: Must acknowledge provider signer before adding deliverables
+            await serving.acknowledgeProviderSigner(provider1, provider1Signer);
+
             // Store deliverable IDs to verify circular array behavior
             const deliverableIds: string[] = [];
             const modelHashes: string[] = [];
 
-            // First, add deliverables up to the limit
+            // First, add deliverables up to the limit (MED-4: must acknowledge each)
             for (let i = 0; i < MAX_DELIVERABLES_PER_ACCOUNT; i++) {
                 const deliverableId = ethers.hexlify(ethers.randomBytes(32));
                 const modelRootHash = ethers.hexlify(ethers.randomBytes(32));
                 deliverableIds.push(deliverableId);
                 modelHashes.push(modelRootHash);
                 await serving.connect(provider1).addDeliverable(ownerAddress, deliverableId, modelRootHash);
+                // MED-4: Acknowledge immediately to allow adding next deliverable
+                await serving.acknowledgeDeliverable(provider1, deliverableId);
             }
 
             let account = await serving.getAccount(ownerAddress, provider1);
@@ -613,6 +622,7 @@ describe("Fine tuning serving", () => {
             const newId1 = ethers.hexlify(ethers.randomBytes(32));
             const newHash1 = ethers.hexlify(ethers.randomBytes(32));
             await serving.connect(provider1).addDeliverable(ownerAddress, newId1, newHash1);
+            await serving.acknowledgeDeliverable(provider1, newId1);
 
             account = await serving.getAccount(ownerAddress, provider1);
             expect(account.deliverables.length).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
@@ -620,9 +630,9 @@ describe("Fine tuning serving", () => {
             expect(account.deliverablesHead).to.equal(1); // Head moved to next position
 
             // The oldest deliverable (first one) should have been removed from the mapping
-            await expect(serving.getDeliverable(ownerAddress, provider1Address, deliverableIds[0])).to.be.revertedWith(
-                "Deliverable does not exist"
-            );
+            await expect(serving.getDeliverable(ownerAddress, provider1Address, deliverableIds[0]))
+                .to.be.revertedWithCustomError(serving, "DeliverableNotExists")
+                .withArgs(deliverableIds[0]);
 
             // New deliverable should be accessible
             const newDeliverable1 = await serving.getDeliverable(ownerAddress, provider1Address, newId1);
@@ -633,6 +643,7 @@ describe("Fine tuning serving", () => {
             const newId2 = ethers.hexlify(ethers.randomBytes(32));
             const newHash2 = ethers.hexlify(ethers.randomBytes(32));
             await serving.connect(provider1).addDeliverable(ownerAddress, newId2, newHash2);
+            await serving.acknowledgeDeliverable(provider1, newId2);
 
             account = await serving.getAccount(ownerAddress, provider1);
             expect(account.deliverables.length).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
@@ -640,9 +651,9 @@ describe("Fine tuning serving", () => {
             expect(account.deliverablesHead).to.equal(2); // Head moved to next position
 
             // The second oldest deliverable should now be removed
-            await expect(serving.getDeliverable(ownerAddress, provider1Address, deliverableIds[1])).to.be.revertedWith(
-                "Deliverable does not exist"
-            );
+            await expect(serving.getDeliverable(ownerAddress, provider1Address, deliverableIds[1]))
+                .to.be.revertedWithCustomError(serving, "DeliverableNotExists")
+                .withArgs(deliverableIds[1]);
 
             // Both new deliverables should be accessible
             const newDeliverable2 = await serving.getDeliverable(ownerAddress, provider1Address, newId2);
@@ -693,15 +704,61 @@ describe("Fine tuning serving", () => {
     });
 });
 
-async function backfillVerifierInput(privateKey: string, v: VerifierInputStruct): Promise<VerifierInputStruct> {
+async function backfillVerifierInput(privateKey: string, v: VerifierInputStruct, servingContract: Serving): Promise<VerifierInputStruct> {
     const wallet = new newEthers.Wallet(privateKey);
 
-    const hash = newEthers.solidityPackedKeccak256(
-        ["bytes", "bytes", "uint256", "address", "uint256", "address"],
-        [v.encryptedSecret, v.modelRootHash, v.nonce, v.providerSigner, v.taskFee, v.user]
+    // EIP-712 Domain Separator
+    const DOMAIN_TYPEHASH = newEthers.id("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    const MESSAGE_TYPEHASH = newEthers.id(
+        "VerifierMessage(string id,bytes encryptedSecret,bytes modelRootHash,uint256 nonce,address providerSigner,uint256 taskFee,address user)"
+    );
+    const DOMAIN_NAME = "0G Fine-Tuning Serving";
+    const DOMAIN_VERSION = "1";
+
+    const chainId = (await ethers.provider.getNetwork()).chainId;
+    const servingAddress = await servingContract.getAddress();
+
+    // Compute domain separator
+    const domainSeparator = newEthers.keccak256(
+        newEthers.AbiCoder.defaultAbiCoder().encode(
+            ["bytes32", "bytes32", "bytes32", "uint256", "address"],
+            [
+                DOMAIN_TYPEHASH,
+                newEthers.id(DOMAIN_NAME),
+                newEthers.id(DOMAIN_VERSION),
+                chainId,
+                servingAddress
+            ]
+        )
     );
 
-    v.signature = await wallet.signMessage(ethers.toBeArray(hash));
+    // Compute struct hash
+    const structHash = newEthers.keccak256(
+        newEthers.AbiCoder.defaultAbiCoder().encode(
+            ["bytes32", "bytes32", "bytes32", "bytes32", "uint256", "address", "uint256", "address"],
+            [
+                MESSAGE_TYPEHASH,
+                newEthers.id(v.id),  // CRIT-2 FIX: Include 'id' to prevent signature reuse
+                newEthers.keccak256(v.encryptedSecret),
+                newEthers.keccak256(v.modelRootHash),
+                v.nonce,
+                v.providerSigner,
+                v.taskFee,
+                v.user
+            ]
+        )
+    );
+
+    // Compute EIP-712 typed data hash
+    const digest = newEthers.keccak256(
+        newEthers.solidityPacked(
+            ["string", "bytes32", "bytes32"],
+            ["\x19\x01", domainSeparator, structHash]
+        )
+    );
+
+    // Sign the digest directly (not using signMessage which adds prefix)
+    v.signature = wallet.signingKey.sign(digest).serialized;
     return v;
 }
 
@@ -735,7 +792,7 @@ describe("FineTuning Serving - Receive Function", () => {
                     to: await serving.getAddress(),
                     value: directTransfer,
                 })
-            ).to.be.revertedWith("Direct deposits disabled; use LedgerManager");
+            ).to.be.revertedWithCustomError(serving, "DirectDepositsDisabled");
 
             // Normal deposit through ledger should still work
             await ledger.connect(user1).depositFund({ value: normalDeposit });

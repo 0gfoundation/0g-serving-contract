@@ -301,9 +301,6 @@ describe("Inference Serving", () => {
     });
 
     describe("Refund Array Optimization", () => {
-        // Constants from AccountLibrary contract
-        const MAX_REFUNDS_PER_ACCOUNT = 5;
-
         beforeEach(async () => {
             // Setup: Transfer funds to ensure we have a clean test account
             // After setup: balance=2.5 ether (2 from initial + 0.5 new), pendingRefund=0, refunds=[], validRefundsLength=0
