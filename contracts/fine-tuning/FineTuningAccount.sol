@@ -305,16 +305,56 @@ library AccountLibrary {
         return (amount, 0);
     }
 
-    function deleteAccount(AccountMap storage map, address user, address provider) internal {
+    /// @notice Deletes an account while preserving nonce to prevent signature replay attacks
+    /// @dev This implements "soft delete" - removes from indexes but preserves nonce in storage
+    /// @dev SECURITY: nonce is intentionally NOT reset to prevent replay attacks if account is recreated
+    /// @param map The account map storage
+    /// @param user The user address
+    /// @param provider The provider address
+    /// @return deletedBalance The balance that was deleted (for event emission)
+    function deleteAccount(AccountMap storage map, address user, address provider) internal returns (uint deletedBalance) {
         bytes32 key = _key(user, provider);
         if (!_contains(map, key)) {
-            return;
+            return 0;
         }
 
+        // Preserve nonce to prevent signature replay attacks when account is recreated
+        Account storage account = map._values[key];
+
+        // Capture balance before deletion for event
+        deletedBalance = account.balance;
+
+        // Clear all balance and state data
+        account.balance = 0;
+        account.pendingRefund = 0;
+        account.providerSigner = address(0);
+        account.validRefundsLength = 0;
+
+        // IMPORTANT: Must explicitly delete each deliverable from mapping
+        // Unlike arrays, Solidity mappings cannot be deleted in bulk
+        // If we don't delete these, addDeliverable() will revert when the account
+        // is recreated and tries to use the same deliverable IDs (line 606 check)
+        // Gas cost is acceptable: MAX_DELIVERABLES_PER_ACCOUNT = 20 iterations
+        for (uint i = 0; i < account.deliverablesCount; i++) {
+            uint index = (account.deliverablesHead + i) % MAX_DELIVERABLES_PER_ACCOUNT;
+            string memory deliverableId = account.deliverableIds[index];
+            delete account.deliverables[deliverableId];
+        }
+
+        account.deliverablesHead = 0;
+        account.deliverablesCount = 0;
+        delete account.refunds;
+        delete account.additionalInfo;
+
+        // Note: nonce is intentionally NOT reset
+        // This prevents signature replay attacks if the account is recreated
+
+        // Remove from indexes to make account appear "deleted"
         map._providerIndex[provider].remove(key);
         map._userIndex[user].remove(key);
         map._keys.remove(key);
-        delete map._values[key];
+
+        // Note: We do NOT delete map._values[key] to preserve nonce
     }
 
     function depositFund(
@@ -694,6 +734,10 @@ library AccountLibrary {
         return value;
     }
 
+    /// @dev Internal function to initialize or update account data
+    /// @dev SECURITY: This function intentionally does NOT reset nonce
+    /// @dev This allows deleteAccount's "soft delete" to preserve nonce across account recreation
+    /// @dev preventing signature replay attacks (see deleteAccount line 345 comment)
     function _set(
         AccountMap storage map,
         bytes32 key,
@@ -710,6 +754,9 @@ library AccountLibrary {
         account.validRefundsLength = 0; // Initialize validRefundsLength
         account.deliverablesHead = 0; // Initialize circular array head
         account.deliverablesCount = 0; // Initialize deliverable count
+        // NOTE: nonce is intentionally NOT set here
+        // For new accounts, it defaults to 0
+        // For re-created accounts, it preserves the old nonce value
         map._keys.add(key);
     }
 
