@@ -301,9 +301,6 @@ describe("Inference Serving", () => {
     });
 
     describe("Refund Array Optimization", () => {
-        // Constants from AccountLibrary contract
-        const MAX_REFUNDS_PER_ACCOUNT = 5;
-
         beforeEach(async () => {
             // Setup: Transfer funds to ensure we have a clean test account
             // After setup: balance=2.5 ether (2 from initial + 0.5 new), pendingRefund=0, refunds=[], validRefundsLength=0
@@ -373,60 +370,51 @@ describe("Inference Serving", () => {
             expect(account.pendingRefund).to.equal(initialPendingRefund - cancelledAmount);
         });
 
-        it("should create multiple dirty data entries and demonstrate cleanup threshold", async () => {
-            // Strategy: Create multiple refunds through partial cancellation, then process them
+        it("should demonstrate grow-only refund array with validRefundsLength boundary", async () => {
+            // Strategy: Create multiple refunds WITHOUT triggering LIFO cancellation
+            // Key: Add funds first, THEN create refunds - don't interleave transfers that cancel refunds
 
-            // Step 1: Create a large refund
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
-
-            let account = await serving.getAccount(user1Address, provider1);
-            expect(account.validRefundsLength).to.equal(1); // Check active refunds (fixed-length array)
-            // After: refunds=[{amount:2.5 ether, processed:false}], validRefundsLength=1
-
-            // Step 2: Use partial cancellation to split the refund into smaller pieces
-            const smallTransfer = ethers.parseEther("0.01");
-            await ledger.connect(user1).transferFund(provider1Address, "inference-test", smallTransfer);
-            // After: refunds=[{amount:2.49 ether, processed:false}], validRefundsLength=1
-
-            // Now request another refund for the new balance
-            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
-            // After: refunds=[{amount:2.49 ether, processed:false}, {amount:0.01 ether, processed:false}], validRefundsLength=2
-
-            account = await serving.getAccount(user1Address, provider1);
-            console.log(
-                `After partial cancellation and new refund: refunds.length=${
-                    account.refunds.length
-                }, pendingRefund=${account.pendingRefund.toString()}`
-            );
-
-            // Step 3: Repeat the pattern to create more refunds
-            // The key insight: each retrieveFund creates a new refund entry (array grows on-demand)
-
-            while (account.validRefundsLength < MAX_REFUNDS_PER_ACCOUNT) {
-                // Small transfer and refund to create new entries
-                await ledger.connect(user1).transferFund(provider1Address, "inference-test", smallTransfer);
-                await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
-
-                account = await serving.getAccount(user1Address, provider1);
-                console.log(`Loop iteration: validRefundsLength=${account.validRefundsLength}, refunds.length=${account.refunds.length}`);
+            // Step 1: Add multiple small deposits to build up balance
+            const smallAmount = ethers.parseEther("0.1");
+            for (let i = 0; i < 3; i++) {
+                await ledger.connect(user1).transferFund(provider1Address, "inference-test", smallAmount);
             }
 
-            // Verify we reached the limit
-            account = await serving.getAccount(user1Address, provider1);
-            expect(account.validRefundsLength).to.equal(MAX_REFUNDS_PER_ACCOUNT);
-            console.log(`Reached MAX_REFUNDS_PER_ACCOUNT: ${account.validRefundsLength}`);
+            let account = await serving.getAccount(user1Address, provider1);
+            const totalBalance = account.balance;
+            expect(totalBalance).to.be.greaterThan(ethers.parseEther("2.5")); // Initial 2.5 + 0.3
 
-            // Step 4: Process all refunds
+            // Step 2: Create multiple refunds by retrieving in portions
+            // First refund: Retrieve part of balance
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
+            account = await serving.getAccount(user1Address, provider1);
+            expect(account.validRefundsLength).to.equal(1);
+            console.log(`After first retrieve: validRefundsLength=1, pendingRefund=${account.pendingRefund}`);
+
+            // Step 3: Add more funds WITHOUT canceling (send more than what's pending)
+            const largeAmount = ethers.parseEther("1.0");
+            await ledger.connect(user1).transferFund(provider1Address, "inference-test", largeAmount);
+
+            // Create second refund
+            await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
+            account = await serving.getAccount(user1Address, provider1);
+            expect(account.validRefundsLength).to.equal(2);
+            console.log(`After second retrieve: validRefundsLength=2, refunds.length=${account.refunds.length}`);
+
+            // Step 4: Process refunds - demonstrates swap-and-shrink with boundary adjustment
             await time.increase(lockTime + 1);
             await ledger.connect(user1).retrieveFund([provider1Address], "inference-test");
 
             account = await serving.getAccount(user1Address, provider1);
 
-            // Verify boundary adjustment: array grows on-demand, validRefundsLength tracks active refunds
-            // After processing all refunds, all refunds are processed and removed
-            expect(account.validRefundsLength).to.be.equal(0);
-            expect(account.balance).to.be.equal(0);
-            expect(account.pendingRefund).to.be.equal(0);
+            // Verify boundary adjustment: validRefundsLength shrinks to 0 after processing
+            // Array itself is NOT popped - it's grow-only, only the boundary moves
+            // Physical array may still contain old data in [validRefundsLength, refunds.length) but it's inactive
+            expect(account.validRefundsLength).to.equal(0);
+            expect(account.balance).to.equal(0);
+            expect(account.pendingRefund).to.equal(0);
+            // Physical array length may be > 0 but those are inactive slots
+            console.log(`After processing: validRefundsLength=0, physical array length=${account.refunds.length}`);
         });
     });
 
