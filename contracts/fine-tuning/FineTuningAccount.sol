@@ -76,12 +76,15 @@ struct Refund {
     bool processed;
 }
 
+/// @dev GAS-5: Struct field packing optimization
+/// @dev acknowledged (1 byte) + timestamp (31 bytes) = 32 bytes = 1 storage slot
+/// @dev Saves ~2,900 gas per deliverable write (1 SSTORE avoided)
 struct Deliverable {
     string id; // Unique identifier for the deliverable
     bytes modelRootHash;
     bytes encryptedSecret;
     bool acknowledged;
-    uint timestamp; // When this deliverable was added
+    uint248 timestamp; // When this deliverable was added (uint248 is sufficient: 2^248 seconds >> universe age)
 }
 
 struct AccountSummary {
@@ -422,9 +425,12 @@ library AccountLibrary {
             uint remainingCancel = cancelRetrievingAmount;
             uint newPendingRefund = account.pendingRefund;
 
+            // GAS-6: Cache array length to save ~100 gas per iteration
+            uint refundsLength = account.refunds.length;
+
             // Process refunds in-place to avoid memory allocation
             uint writeIndex = 0;
-            for (uint i = 0; i < account.refunds.length; ) {
+            for (uint i = 0; i < refundsLength; ) {
                 Refund storage refund = account.refunds[i];
 
                 if (refund.processed) {
@@ -535,7 +541,9 @@ library AccountLibrary {
     ) internal returns (uint totalAmount, uint balance, uint pendingRefund) {
         Account storage account = _get(map, user, provider);
 
-        if (account.refunds.length == 0) {
+        // GAS-6: Cache array length to save ~100 gas per iteration
+        uint refundsLength = account.refunds.length;
+        if (refundsLength == 0) {
             return (0, account.balance, account.pendingRefund);
         }
 
@@ -545,7 +553,7 @@ library AccountLibrary {
         uint currentTime = block.timestamp;
 
         // Process refunds in-place
-        for (uint i = 0; i < account.refunds.length; ) {
+        for (uint i = 0; i < refundsLength; ) {
             Refund storage refund = account.refunds[i];
 
             if (refund.processed) {
@@ -572,15 +580,15 @@ library AccountLibrary {
         account.validRefundsLength = writeIndex;
 
         // Clean up or mark dirty data
-        if (writeIndex < account.refunds.length) {
-            uint dirtyCount = account.refunds.length - writeIndex;
+        if (writeIndex < refundsLength) {
+            uint dirtyCount = refundsLength - writeIndex;
 
             if (dirtyCount >= REFUND_CLEANUP_THRESHOLD) {
                 // Many dirty entries: physical cleanup is more efficient
                 _cleanupRefunds(account, writeIndex);
             } else {
                 // Few dirty entries: mark as processed to prevent duplicate processing
-                for (uint i = writeIndex; i < account.refunds.length; ) {
+                for (uint i = writeIndex; i < refundsLength; ) {
                     account.refunds[i].processed = true;
                     unchecked { ++i; }
                 }
@@ -696,7 +704,7 @@ library AccountLibrary {
             modelRootHash: modelRootHash,
             encryptedSecret: "",
             acknowledged: false,
-            timestamp: block.timestamp
+            timestamp: uint248(block.timestamp) // GAS-5: Safe conversion (block.timestamp << 2^248)
         });
 
         if (account.deliverablesCount < MAX_DELIVERABLES_PER_ACCOUNT) {
