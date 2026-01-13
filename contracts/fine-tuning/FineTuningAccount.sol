@@ -7,6 +7,52 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 uint constant MAX_DELIVERABLES_PER_ACCOUNT = 20;
 uint constant MAX_DELIVERABLE_ID_LENGTH = 256; // HIGH-5 FIX: Max length for deliverable IDs
 
+/// @notice Account structure for user-provider relationship with fine-tuning deliverables
+/// @dev Deliverables are managed using a circular array pattern (FIFO with fixed capacity)
+/// @dev Data Structure:
+///   - deliverables[id]: Mapping storing actual deliverable data by ID
+///   - deliverableIds[]: Fixed-size array (20) storing IDs in chronological order
+///   - deliverablesHead: Points to the oldest deliverable (index of next eviction)
+///   - deliverablesCount: Current number of deliverables (0-20)
+///
+/// @dev Circular Array Mechanics:
+///   When count < MAX (not full):
+///     - New deliverables are appended to position [count]
+///     - Head stays at 0
+///     - Count increments
+///
+///   When count == MAX (full):
+///     - Oldest deliverable at [head] is evicted from mapping
+///     - New deliverable overwrites position [head] in array
+///     - Head advances: head = (head + 1) % MAX
+///     - Count stays at MAX
+///
+/// @dev Example Evolution:
+///   Initial (empty):
+///     deliverableIds: [empty × 20]
+///     head: 0, count: 0
+///
+///   After adding 3 deliverables (id1, id2, id3):
+///     deliverableIds: [id1, id2, id3, empty × 17]
+///     head: 0, count: 3
+///
+///   After adding 20 deliverables (fills array):
+///     deliverableIds: [id1, id2, ..., id20]
+///     head: 0, count: 20
+///
+///   After adding id21 (evicts id1):
+///     deliverableIds: [id21, id2, id3, ..., id20]
+///     head: 1, count: 20
+///     Note: id2 is now the oldest, at index 1
+///
+///   After adding id22 (evicts id2):
+///     deliverableIds: [id21, id22, id3, ..., id20]
+///     head: 2, count: 20
+///     Note: id3 is now the oldest, at index 2
+///
+/// @dev Safety: MED-4 ensures only acknowledged deliverables can be evicted
+///   Serial task execution is enforced on-chain, so when array is full,
+///   the oldest deliverable is guaranteed to be acknowledged and safe to remove
 struct Account {
     address user;
     address provider;
@@ -151,7 +197,7 @@ library AccountLibrary {
         uint resultLength = end - offset;
         accounts = new AccountSummary[](resultLength);
 
-        for (uint i = 0; i < resultLength; i++) {
+        for (uint i = 0; i < resultLength; ) {
             Account storage fullAccount = _at(map, offset + i);
             accounts[i] = AccountSummary({
                 user: fullAccount.user,
@@ -164,6 +210,7 @@ library AccountLibrary {
                 validRefundsLength: fullAccount.validRefundsLength,
                 deliverablesCount: fullAccount.deliverablesCount
             });
+            unchecked { ++i; }
         }
     }
 
@@ -188,7 +235,7 @@ library AccountLibrary {
         uint resultLen = end - offset;
         accounts = new AccountSummary[](resultLen);
 
-        for (uint i = 0; i < resultLen; i++) {
+        for (uint i = 0; i < resultLen; ) {
             bytes32 key = providerKeys.at(offset + i);
             Account storage fullAccount = map._values[key];
             accounts[i] = AccountSummary({
@@ -202,6 +249,7 @@ library AccountLibrary {
                 validRefundsLength: fullAccount.validRefundsLength,
                 deliverablesCount: fullAccount.deliverablesCount
             });
+            unchecked { ++i; }
         }
 
         return (accounts, total);
@@ -228,7 +276,7 @@ library AccountLibrary {
         uint resultLen = end - offset;
         accounts = new AccountSummary[](resultLen);
 
-        for (uint i = 0; i < resultLen; i++) {
+        for (uint i = 0; i < resultLen; ) {
             bytes32 key = userKeys.at(offset + i);
             Account storage fullAccount = map._values[key];
             accounts[i] = AccountSummary({
@@ -242,6 +290,7 @@ library AccountLibrary {
                 validRefundsLength: fullAccount.validRefundsLength,
                 deliverablesCount: fullAccount.deliverablesCount
             });
+            unchecked { ++i; }
         }
 
         return (accounts, total);
@@ -255,7 +304,7 @@ library AccountLibrary {
         require(users.length <= 500, "Batch size too large (max 500)");
         accounts = new AccountSummary[](users.length);
 
-        for (uint i = 0; i < users.length; i++) {
+        for (uint i = 0; i < users.length; ) {
             bytes32 key = _key(users[i], provider);
             if (_contains(map, key)) {
                 Account storage fullAccount = map._values[key];
@@ -271,6 +320,7 @@ library AccountLibrary {
                     deliverablesCount: fullAccount.deliverablesCount
                 });
             }
+            unchecked { ++i; }
         }
     }
 
@@ -336,10 +386,11 @@ library AccountLibrary {
         // If we don't delete these, addDeliverable() will revert when the account
         // is recreated and tries to use the same deliverable IDs (line 606 check)
         // Gas cost is acceptable: MAX_DELIVERABLES_PER_ACCOUNT = 20 iterations
-        for (uint i = 0; i < account.deliverablesCount; i++) {
+        for (uint i = 0; i < account.deliverablesCount; ) {
             uint index = (account.deliverablesHead + i) % MAX_DELIVERABLES_PER_ACCOUNT;
             string memory deliverableId = account.deliverableIds[index];
             delete account.deliverables[deliverableId];
+            unchecked { ++i; }
         }
 
         account.deliverablesHead = 0;
@@ -373,10 +424,11 @@ library AccountLibrary {
 
             // Process refunds in-place to avoid memory allocation
             uint writeIndex = 0;
-            for (uint i = 0; i < account.refunds.length; i++) {
+            for (uint i = 0; i < account.refunds.length; ) {
                 Refund storage refund = account.refunds[i];
 
                 if (refund.processed) {
+                    unchecked { ++i; }
                     continue;
                 }
 
@@ -398,6 +450,7 @@ library AccountLibrary {
                 } else if (!refund.processed) {
                     writeIndex++;
                 }
+                unchecked { ++i; }
             }
 
             // Update validRefundsLength after cancelling refunds
@@ -492,10 +545,11 @@ library AccountLibrary {
         uint currentTime = block.timestamp;
 
         // Process refunds in-place
-        for (uint i = 0; i < account.refunds.length; i++) {
+        for (uint i = 0; i < account.refunds.length; ) {
             Refund storage refund = account.refunds[i];
 
             if (refund.processed) {
+                unchecked { ++i; }
                 continue;
             }
 
@@ -511,6 +565,7 @@ library AccountLibrary {
                 }
                 writeIndex++;
             }
+            unchecked { ++i; }
         }
 
         // Update valid refunds length
@@ -525,8 +580,9 @@ library AccountLibrary {
                 _cleanupRefunds(account, writeIndex);
             } else {
                 // Few dirty entries: mark as processed to prevent duplicate processing
-                for (uint i = writeIndex; i < account.refunds.length; i++) {
+                for (uint i = writeIndex; i < account.refunds.length; ) {
                     account.refunds[i].processed = true;
+                    unchecked { ++i; }
                 }
             }
         }
@@ -694,15 +750,17 @@ library AccountLibrary {
 
         if (count < MAX_DELIVERABLES_PER_ACCOUNT) {
             // Array not full yet, deliverables are in chronological order from index 0
-            for (uint i = 0; i < count; i++) {
+            for (uint i = 0; i < count; ) {
                 ids[i] = account.deliverableIds[i];
+                unchecked { ++i; }
             }
         } else {
             // Array is full, need to reorder starting from the oldest (at head position)
             uint head = account.deliverablesHead;
-            for (uint i = 0; i < count; i++) {
+            for (uint i = 0; i < count; ) {
                 uint sourceIndex = (head + i) % MAX_DELIVERABLES_PER_ACCOUNT;
                 ids[i] = account.deliverableIds[sourceIndex];
+                unchecked { ++i; }
             }
         }
 
@@ -719,8 +777,9 @@ library AccountLibrary {
         deliverables = new Deliverable[](ids.length);
 
         Account storage account = _get(map, user, provider);
-        for (uint i = 0; i < ids.length; i++) {
+        for (uint i = 0; i < ids.length; ) {
             deliverables[i] = account.deliverables[ids[i]];
+            unchecked { ++i; }
         }
 
         return deliverables;
@@ -731,8 +790,9 @@ library AccountLibrary {
     function _cleanupRefunds(Account storage account, uint keepCount) private {
         // Resize array to remove processed refunds
         uint currentLength = account.refunds.length;
-        for (uint i = currentLength; i > keepCount; i--) {
+        for (uint i = currentLength; i > keepCount; ) {
             account.refunds.pop();
+            unchecked { --i; }
         }
     }
 
