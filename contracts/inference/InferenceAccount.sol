@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Unlicense
-pragma solidity >=0.8.22 <0.9.0;
+pragma solidity 0.8.22;
 
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -37,7 +37,6 @@ library AccountLibrary {
 
     // Constants for optimization
     uint constant MAX_REFUNDS_PER_ACCOUNT = 5;
-    uint constant REFUND_CLEANUP_THRESHOLD = 3;
 
     error AccountNotExists(address user, address provider);
     error AccountExists(address user, address provider);
@@ -202,15 +201,19 @@ library AccountLibrary {
         return (amount, 0);
     }
 
-    function deleteAccount(AccountMap storage map, address user, address provider) internal {
+    /// @return deletedBalance The balance that was deleted (for event emission)
+    function deleteAccount(AccountMap storage map, address user, address provider) internal returns (uint deletedBalance) {
         bytes32 key = _key(user, provider);
         if (!_contains(map, key)) {
-            return;
+            return 0;
         }
 
         // Preserve nonce and generation to prevent signature replay attacks
         // when account is recreated
         Account storage account = map._values[key];
+
+        // Capture balance before deletion for event
+        deletedBalance = account.balance;
 
         // Clear all balance and state data
         account.balance = 0;
@@ -279,6 +282,8 @@ library AccountLibrary {
         return (account.revokedBitmap & (uint256(1) << tokenId)) != 0;
     }
 
+    /// @dev Cancel most recent refunds first (LIFO order) when depositing funds
+    /// @dev This prioritizes canceling locked refunds, which benefits the user
     function depositFund(
         AccountMap storage map,
         address user,
@@ -289,43 +294,32 @@ library AccountLibrary {
         Account storage account = _get(map, user, provider);
 
         if (cancelRetrievingAmount > 0 && account.validRefundsLength > 0) {
-            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
+            // Cancel refunds in LIFO order (most recent first)
+            uint actualCancelled = 0;
             uint remainingCancel = cancelRetrievingAmount;
-            uint newPendingRefund = account.pendingRefund;
+            uint validLength = account.validRefundsLength;
 
-            // Use swap-and-shrink: process active refunds and compact
-            uint writeIndex = 0;
-            for (uint i = 0; i < account.validRefundsLength; i++) {
+            // Process from end to start (LIFO - most recent first)
+            for (uint i = validLength; i > 0 && remainingCancel > 0; ) {
+                unchecked { --i; }
                 Refund storage refund = account.refunds[i];
 
-                if (remainingCancel >= refund.amount) {
-                    // Fully cancel this refund - skip it (don't write back)
+                if (refund.amount <= remainingCancel) {
+                    // Fully cancel this refund
+                    actualCancelled += refund.amount;
                     remainingCancel -= refund.amount;
-                    newPendingRefund -= refund.amount;
-                } else if (remainingCancel > 0) {
-                    // Partially cancel this refund - keep with reduced amount
-                    refund.amount -= remainingCancel;
-                    newPendingRefund -= remainingCancel;
-                    remainingCancel = 0;
-                    // Swap to writeIndex if needed
-                    if (i != writeIndex) {
-                        account.refunds[writeIndex] = refund;
-                        account.refunds[writeIndex].index = writeIndex;
-                    }
-                    writeIndex++;
+                    refund.amount = 0;
+                    --validLength;
                 } else {
-                    // Keep this refund unchanged
-                    if (i != writeIndex) {
-                        account.refunds[writeIndex] = refund;
-                        account.refunds[writeIndex].index = writeIndex;
-                    }
-                    writeIndex++;
+                    // Partially cancel this refund
+                    actualCancelled += remainingCancel;
+                    refund.amount -= remainingCancel;
+                    remainingCancel = 0;
                 }
             }
 
-            // Shrink active boundary (no pop needed - just adjust boundary)
-            account.validRefundsLength = writeIndex;
-            account.pendingRefund = newPendingRefund;
+            account.validRefundsLength = validLength;
+            account.pendingRefund -= actualCancelled;
         }
 
         account.balance += amount;
@@ -440,19 +434,28 @@ library AccountLibrary {
     /// @param batchSize Maximum number of accounts to process (use 0 or type(uint).max for all remaining)
     /// @return cleanedCount Number of accounts that had dirty data cleaned
     /// @return nextIndex Index to continue from in next batch (equals totalAccounts when complete)
+    /// @return migratedUsers Array of user addresses that were migrated
+    /// @return migratedCounts Array of counts of refunds migrated per user
+    /// @return newValidLengths Array of new valid lengths per user
     function migrateRefunds(
         AccountMap storage map,
         address provider,
         uint startIndex,
         uint batchSize
-    ) internal returns (uint cleanedCount, uint nextIndex) {
+    ) internal returns (
+        uint cleanedCount,
+        uint nextIndex,
+        address[] memory migratedUsers,
+        uint[] memory migratedCounts,
+        uint[] memory newValidLengths
+    ) {
         cleanedCount = 0;
         EnumerableSet.Bytes32Set storage providerKeys = map._providerIndex[provider];
         uint totalAccounts = providerKeys.length();
 
         // Validate startIndex
         if (totalAccounts == 0) {
-            return (0, 0);
+            return (0, 0, new address[](0), new uint[](0), new uint[](0));
         }
         require(startIndex < totalAccounts, "InferenceAccount: startIndex out of bounds");
 
@@ -463,6 +466,12 @@ library AccountLibrary {
         } else {
             endIndex = startIndex + batchSize;
         }
+
+        // Pre-allocate arrays for event data (max size = batch size)
+        uint batchLength = endIndex - startIndex;
+        migratedUsers = new address[](batchLength);
+        migratedCounts = new uint[](batchLength);
+        newValidLengths = new uint[](batchLength);
 
         for (uint j = startIndex; j < endIndex; j++) {
             bytes32 key = providerKeys.at(j);
@@ -475,7 +484,9 @@ library AccountLibrary {
             // Clean up old dirty data (processed=true) if present
             uint writeIndex = 0;
             bool hasDirty = false;
-            for (uint i = 0; i < account.validRefundsLength; i++) {
+            uint dirtyCount = 0;
+            uint validRefundsLen = account.validRefundsLength;
+            for (uint i = 0; i < validRefundsLen; i++) {
                 if (!account.refunds[i].processed) {
                     if (i != writeIndex) {
                         account.refunds[writeIndex] = account.refunds[i];
@@ -484,6 +495,7 @@ library AccountLibrary {
                     writeIndex++;
                 } else {
                     hasDirty = true;
+                    dirtyCount++;
                 }
             }
 
@@ -503,11 +515,23 @@ library AccountLibrary {
                 require(oldPendingRefund == newPendingRefund, "InferenceAccount: accounting mismatch in migration");
 
                 account.pendingRefund = newPendingRefund;
+
+                // Record migration data for event
+                migratedUsers[cleanedCount] = account.user;
+                migratedCounts[cleanedCount] = dirtyCount;
+                newValidLengths[cleanedCount] = writeIndex;
                 cleanedCount++;
             }
         }
 
         nextIndex = endIndex;
+
+        // Resize arrays to actual cleaned count
+        assembly {
+            mstore(migratedUsers, cleanedCount)
+            mstore(migratedCounts, cleanedCount)
+            mstore(newValidLengths, cleanedCount)
+        }
     }
 
     function _at(AccountMap storage map, uint index) internal view returns (Account storage) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Unlicense
-pragma solidity >=0.8.22 <0.9.0;
+pragma solidity 0.8.22;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -98,6 +98,11 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     event RecommendedServiceUpdated(string serviceType, string version, address serviceAddress);
     event LedgerInfoUpdated(address indexed user, string additionalInfo);
     event FundSpent(address indexed user, address indexed service, uint256 amount);
+    event UserServiceProvidersMigrated(
+        address indexed user,
+        address indexed serviceAddress,
+        uint256 providerCount
+    );
 
     // Errors
     error LedgerNotExists(address user);
@@ -206,8 +211,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         // Use new serviceAddress-based mapping
         EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
 
-        address[] memory providerList = new address[](providers.length());
-        for (uint256 i = 0; i < providers.length(); i++) {
+        uint256 providersLen = providers.length();
+        address[] memory providerList = new address[](providersLen);
+        for (uint256 i = 0; i < providersLen; i++) {
             providerList[i] = providers.at(i);
         }
 
@@ -447,12 +453,14 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
             // Use new serviceAddress-based mapping
             EnumerableSet.AddressSet storage providers = $.userServiceProvidersByAddress[user][serviceAddress];
 
-            address[] memory providerList = new address[](providers.length());
-            for (uint j = 0; j < providers.length(); j++) {
+            uint256 providersLen = providers.length();
+            address[] memory providerList = new address[](providersLen);
+            for (uint j = 0; j < providersLen; j++) {
                 providerList[j] = providers.at(j);
             }
 
-            for (uint j = 0; j < providerList.length; j++) {
+            uint256 providerListLen = providerList.length;
+            for (uint j = 0; j < providerListLen; j++) {
                 try service.serviceContract.deleteAccount(user, providerList[j]) {
                     providers.remove(providerList[j]);
                 } catch {
@@ -703,6 +711,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
                 oldProviders.remove(oldProviders.at(0)); // Always remove first element
             }
 
+            emit UserServiceProvidersMigrated(user, serviceAddress, providerCount);
             migratedCount++;
         }
 
