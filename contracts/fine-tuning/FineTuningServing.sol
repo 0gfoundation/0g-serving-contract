@@ -77,6 +77,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         bool occupied
     );
     event ServiceRemoved(address indexed user);
+    event AccountDeleted(address indexed user, address indexed provider, uint256 refundedAmount);
 
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
@@ -212,7 +213,8 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     function deleteAccount(address user, address provider) external onlyLedger {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        $.accountMap.deleteAccount(user, provider);
+        uint deletedBalance = $.accountMap.deleteAccount(user, provider);
+        emit AccountDeleted(user, provider, deletedBalance);
     }
 
     function depositFund(address user, address provider, uint cancelRetrievingAmount) external payable onlyLedger {
