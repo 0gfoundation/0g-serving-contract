@@ -8,6 +8,11 @@ uint constant MAX_DELIVERABLES_PER_ACCOUNT = 20;
 uint constant MAX_DELIVERABLE_ID_LENGTH = 256; // HIGH-5 FIX: Max length for deliverable IDs
 
 /// @notice Account structure for user-provider relationship with fine-tuning deliverables
+/// @dev Refunds array management (grow-only strategy):
+/// 1. Active refunds are stored in positions [0, validRefundsLength)
+/// 2. Inactive/reusable slots are in positions [validRefundsLength, refunds.length)
+/// 3. Array grows on-demand up to MAX_REFUNDS_PER_ACCOUNT, never shrinks
+/// 4. The 'processed' field in Refund is kept for storage compatibility but not used in logic
 /// @dev Deliverables are managed using a circular array pattern (FIFO with fixed capacity)
 /// @dev Data Structure:
 ///   - deliverables[id]: Mapping storing actual deliverable data by ID
@@ -119,7 +124,6 @@ library AccountLibrary {
 
     // Constants for optimization
     uint constant MAX_REFUNDS_PER_ACCOUNT = 5;
-    uint constant REFUND_CLEANUP_THRESHOLD = 3;
     uint constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
 
     // Custom errors for gas efficiency (GAS-1 optimization)
@@ -412,6 +416,10 @@ library AccountLibrary {
         // Note: We do NOT delete map._values[key] to preserve nonce
     }
 
+    /// @notice Deposit funds and optionally cancel pending refunds
+    /// @dev Cancel most recent refunds first (LIFO order) when depositing funds
+    /// @dev This prioritizes canceling locked refunds, which benefits the user
+    /// @dev Aligned with Inference contract implementation
     function depositFund(
         AccountMap storage map,
         address user,
@@ -421,53 +429,33 @@ library AccountLibrary {
     ) internal returns (uint, uint) {
         Account storage account = _get(map, user, provider);
 
-        if (cancelRetrievingAmount > 0 && account.refunds.length > 0) {
+        if (cancelRetrievingAmount > 0 && account.validRefundsLength > 0) {
+            // Cancel refunds in LIFO order (most recent first)
+            uint actualCancelled = 0;
             uint remainingCancel = cancelRetrievingAmount;
-            uint newPendingRefund = account.pendingRefund;
+            uint validLength = account.validRefundsLength;
 
-            // GAS-6: Cache array length to save ~100 gas per iteration
-            uint refundsLength = account.refunds.length;
-
-            // Process refunds in-place to avoid memory allocation
-            uint writeIndex = 0;
-            for (uint i = 0; i < refundsLength; ) {
+            // Process from end to start (LIFO - most recent first)
+            for (uint i = validLength; i > 0 && remainingCancel > 0; ) {
+                unchecked { --i; }
                 Refund storage refund = account.refunds[i];
 
-                if (refund.processed) {
-                    unchecked { ++i; }
-                    continue;
-                }
-
-                if (remainingCancel >= refund.amount) {
+                if (refund.amount <= remainingCancel) {
+                    // Fully cancel this refund
+                    actualCancelled += refund.amount;
                     remainingCancel -= refund.amount;
-                    newPendingRefund -= refund.amount;
-                    refund.processed = true; // Mark as processed instead of removing
-                } else if (remainingCancel > 0) {
+                    refund.amount = 0;
+                    --validLength;
+                } else {
+                    // Partially cancel this refund
+                    actualCancelled += remainingCancel;
                     refund.amount -= remainingCancel;
-                    newPendingRefund -= remainingCancel;
                     remainingCancel = 0;
                 }
-
-                // Keep unprocessed refunds
-                if (!refund.processed && i != writeIndex) {
-                    account.refunds[writeIndex] = refund;
-                    account.refunds[writeIndex].index = writeIndex;
-                    writeIndex++;
-                } else if (!refund.processed) {
-                    writeIndex++;
-                }
-                unchecked { ++i; }
             }
 
-            // Update validRefundsLength after cancelling refunds
-            account.validRefundsLength = writeIndex;
-
-            // Cleanup if needed
-            if (writeIndex < account.refunds.length) {
-                _cleanupRefunds(account, writeIndex);
-            }
-
-            account.pendingRefund = newPendingRefund;
+            account.validRefundsLength = validLength;
+            account.pendingRefund -= actualCancelled;
         }
 
         account.balance += amount;
@@ -533,6 +521,10 @@ library AccountLibrary {
         account.pendingRefund += amount;
     }
 
+    /// @notice Process unlocked refunds for a user-provider account
+    /// @dev Uses grow-only strategy aligned with Inference contract
+    /// @dev Only processes active refunds within [0, validRefundsLength) boundary
+    /// @dev No cleanup needed - simply adjusts validRefundsLength boundary
     function processRefund(
         AccountMap storage map,
         address user,
@@ -541,9 +533,8 @@ library AccountLibrary {
     ) internal returns (uint totalAmount, uint balance, uint pendingRefund) {
         Account storage account = _get(map, user, provider);
 
-        // GAS-6: Cache array length to save ~100 gas per iteration
-        uint refundsLength = account.refunds.length;
-        if (refundsLength == 0) {
+        if (account.validRefundsLength == 0) {
+            // No need to ensure capacity here - if validRefundsLength > 0, array is already initialized
             return (0, account.balance, account.pendingRefund);
         }
 
@@ -552,48 +543,26 @@ library AccountLibrary {
         uint writeIndex = 0;
         uint currentTime = block.timestamp;
 
-        // Process refunds in-place
-        for (uint i = 0; i < refundsLength; ) {
+        // Use swap-and-shrink: process active refunds and compact
+        for (uint i = 0; i < account.validRefundsLength; i++) {
             Refund storage refund = account.refunds[i];
 
-            if (refund.processed) {
-                unchecked { ++i; }
-                continue;
-            }
-
             if (currentTime >= refund.createdAt + lockTime) {
+                // Refund is unlocked, process it (skip - don't write back)
                 totalAmount += refund.amount;
-                refund.processed = true; // Mark as processed
             } else {
+                // Refund still locked, keep it
                 pendingRefund += refund.amount;
-                // Keep unprocessed refunds
                 if (i != writeIndex) {
                     account.refunds[writeIndex] = refund;
                     account.refunds[writeIndex].index = writeIndex;
                 }
                 writeIndex++;
             }
-            unchecked { ++i; }
         }
 
-        // Update valid refunds length
+        // Shrink active boundary (no pop needed - just adjust boundary)
         account.validRefundsLength = writeIndex;
-
-        // Clean up or mark dirty data
-        if (writeIndex < refundsLength) {
-            uint dirtyCount = refundsLength - writeIndex;
-
-            if (dirtyCount >= REFUND_CLEANUP_THRESHOLD) {
-                // Many dirty entries: physical cleanup is more efficient
-                _cleanupRefunds(account, writeIndex);
-            } else {
-                // Few dirty entries: mark as processed to prevent duplicate processing
-                for (uint i = writeIndex; i < refundsLength; ) {
-                    account.refunds[i].processed = true;
-                    unchecked { ++i; }
-                }
-            }
-        }
 
         account.balance -= totalAmount;
         account.pendingRefund = pendingRefund;
@@ -791,17 +760,6 @@ library AccountLibrary {
         }
 
         return deliverables;
-    }
-
-    // Helper functions
-
-    function _cleanupRefunds(Account storage account, uint keepCount) private {
-        // Resize array to remove processed refunds
-        uint currentLength = account.refunds.length;
-        for (uint i = currentLength; i > keepCount; ) {
-            account.refunds.pop();
-            unchecked { --i; }
-        }
     }
 
     // common functions

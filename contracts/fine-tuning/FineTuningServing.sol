@@ -384,54 +384,41 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     /// @param account The account storage reference
     /// @param amount The amount to settle
     /// @dev CRIT-3 FIX: Uses call() instead of transfer() to avoid 2300 gas limit issues
-    /// @dev GAS-2: Cache storage variables to save ~100 gas
+    /// @dev Uses grow-only refund strategy aligned with Inference contract
+    /// @dev Refunds are processed in LIFO order; validRefundsLength tracks active refunds
     function _settleFees(Account storage account, uint amount) private {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
 
-        // GAS-2: Cache frequently accessed storage variables
-        uint accountBalance = account.balance;
-        uint pendingRefund = account.pendingRefund;
-        uint availableBalance = accountBalance - pendingRefund;
+        if (amount > (account.balance - account.pendingRefund)) {
+            // Need to cancel some refunds to cover the fee
+            uint amountFromRefunds = amount - (account.balance - account.pendingRefund);
+            uint remainingToDeduct = amountFromRefunds;
+            uint validLength = account.validRefundsLength;
 
-        if (amount > availableBalance) {
-            uint remainingFee = amount - availableBalance;
-            if (pendingRefund < remainingFee) {
-                revert InvalidVerifierInput("insufficient balance in pendingRefund");
-            }
-
-            pendingRefund -= remainingFee;
-
-            // Optimized: Process from the end with early exit
-            uint refundsLength = account.refunds.length;
-            for (uint i = refundsLength; i > 0 && remainingFee > 0; ) {
-                Refund storage refund = account.refunds[i - 1];
-                if (refund.processed) {
-                    unchecked { --i; }
-                    continue;
-                }
-
-                if (refund.amount <= remainingFee) {
-                    remainingFee -= refund.amount;
-                    refund.amount = 0;
-                    refund.processed = true;
-                } else {
-                    refund.amount -= remainingFee;
-                    remainingFee = 0;
-                    unchecked { --i; }
-                    break;
-                }
+            // Single pass: process refunds from end to start (LIFO - most recent first)
+            for (uint i = validLength; i > 0 && remainingToDeduct > 0; ) {
                 unchecked { --i; }
+                Refund storage refund = account.refunds[i];
+
+                if (refund.amount <= remainingToDeduct) {
+                    // Fully cancel this refund
+                    remainingToDeduct -= refund.amount;
+                    refund.amount = 0;
+                    --validLength;
+                } else {
+                    // Partially cancel this refund
+                    refund.amount -= remainingToDeduct;
+                    remainingToDeduct = 0;
+                }
             }
 
-            // Write back updated pendingRefund
-            account.pendingRefund = pendingRefund;
+            account.validRefundsLength = validLength;
+            account.pendingRefund -= amountFromRefunds;
         }
 
-        // Update balance and emit event with cached values
-        accountBalance -= amount;
-        account.balance = accountBalance;
+        account.balance -= amount;
         $.ledger.spendFund(account.user, amount);
-        emit BalanceUpdated(account.user, msg.sender, accountBalance, pendingRefund);
+        emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
 
         // CRIT-3 FIX: Use call() instead of transfer() to support contracts with expensive receive() fallbacks
         // transfer() only forwards 2300 gas which can fail for contract recipients
