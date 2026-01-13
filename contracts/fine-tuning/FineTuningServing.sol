@@ -131,6 +131,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     /// @dev MED-5: This change applies immediately to ALL pending refunds
     /// @dev The new lockTime will be used when processing any refund, regardless of when it was created
     /// @dev Owner should exercise caution as this affects users' expectations for refund timing
+    /// @dev GAS-8: Skip storage write if value unchanged (~2900 gas saved)
     /// @param _locktime The new lock time (must be between MIN_LOCKTIME and MAX_LOCKTIME)
     function updateLockTime(uint _locktime) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
@@ -138,18 +139,25 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
             revert LockTimeOutOfRange(_locktime);
         }
         uint256 oldLockTime = $.lockTime;
-        $.lockTime = _locktime;
-        emit LockTimeUpdated(oldLockTime, _locktime);
+        // GAS-8: Only write if value changed
+        if (oldLockTime != _locktime) {
+            $.lockTime = _locktime;
+            emit LockTimeUpdated(oldLockTime, _locktime);
+        }
     }
 
     /// @notice Updates the penalty percentage for unacknowledged deliverables
+    /// @dev GAS-8: Skip storage write if value unchanged (~2900 gas saved)
     /// @param _penaltyPercentage The new penalty percentage (0-100)
     function updatePenaltyPercentage(uint _penaltyPercentage) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         if (_penaltyPercentage > 100) {
             revert PenaltyPercentageTooHigh(_penaltyPercentage);
         }
-        $.penaltyPercentage = _penaltyPercentage;
+        // GAS-8: Only write if value changed
+        if ($.penaltyPercentage != _penaltyPercentage) {
+            $.penaltyPercentage = _penaltyPercentage;
+        }
     }
 
     // user functions
@@ -320,15 +328,20 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     /// @notice Settles fees for a completed deliverable with TEE signature verification
     /// @param verifierInput The verifier input containing signature and deliverable data
     /// @dev CRIT-4 FIX: Added nonReentrant modifier to prevent reentrancy attacks
+    /// @dev GAS-2: Cache storage variables to save ~100 gas
     function settleFees(VerifierInput calldata verifierInput) external nonReentrant {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         Account storage account = $.accountMap.getAccount(verifierInput.user, msg.sender);
 
+        // GAS-2: Cache frequently accessed storage variables
+        address providerSigner = account.providerSigner;
+        uint accountNonce = account.nonce;
+
         // Group all validation checks together for gas efficiency
-        if (account.providerSigner != verifierInput.providerSigner) {
+        if (providerSigner != verifierInput.providerSigner) {
             revert InvalidVerifierInput("provider signing address is not acknowledged");
         }
-        if (account.nonce >= verifierInput.nonce) {
+        if (accountNonce >= verifierInput.nonce) {
             revert InvalidVerifierInput("nonce should larger than the current nonce");
         }
         if (account.balance < verifierInput.taskFee) {
@@ -344,8 +357,8 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
             revert InvalidVerifierInput("model root hash mismatch");
         }
 
-        // Verify TEE signature using EIP-712
-        bool teePassed = verifierInput.verifySignature(account.providerSigner, address(this));
+        // Verify TEE signature using EIP-712 (uses cached providerSigner)
+        bool teePassed = verifierInput.verifySignature(providerSigner, address(this));
         if (!teePassed) {
             revert InvalidVerifierInput("TEE settlement validation failed");
         }
@@ -371,23 +384,29 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     /// @param account The account storage reference
     /// @param amount The amount to settle
     /// @dev CRIT-3 FIX: Uses call() instead of transfer() to avoid 2300 gas limit issues
+    /// @dev GAS-2: Cache storage variables to save ~100 gas
     function _settleFees(Account storage account, uint amount) private {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        uint availableBalance = account.balance - account.pendingRefund;
+
+        // GAS-2: Cache frequently accessed storage variables
+        uint accountBalance = account.balance;
+        uint pendingRefund = account.pendingRefund;
+        uint availableBalance = accountBalance - pendingRefund;
 
         if (amount > availableBalance) {
             uint remainingFee = amount - availableBalance;
-            if (account.pendingRefund < remainingFee) {
+            if (pendingRefund < remainingFee) {
                 revert InvalidVerifierInput("insufficient balance in pendingRefund");
             }
 
-            account.pendingRefund -= remainingFee;
+            pendingRefund -= remainingFee;
 
             // Optimized: Process from the end with early exit
             uint refundsLength = account.refunds.length;
-            for (uint i = refundsLength; i > 0 && remainingFee > 0; i--) {
+            for (uint i = refundsLength; i > 0 && remainingFee > 0; ) {
                 Refund storage refund = account.refunds[i - 1];
                 if (refund.processed) {
+                    unchecked { --i; }
                     continue;
                 }
 
@@ -398,14 +417,21 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
                 } else {
                     refund.amount -= remainingFee;
                     remainingFee = 0;
+                    unchecked { --i; }
                     break;
                 }
+                unchecked { --i; }
             }
+
+            // Write back updated pendingRefund
+            account.pendingRefund = pendingRefund;
         }
 
-        account.balance -= amount;
+        // Update balance and emit event with cached values
+        accountBalance -= amount;
+        account.balance = accountBalance;
         $.ledger.spendFund(account.user, amount);
-        emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
+        emit BalanceUpdated(account.user, msg.sender, accountBalance, pendingRefund);
 
         // CRIT-3 FIX: Use call() instead of transfer() to support contracts with expensive receive() fallbacks
         // transfer() only forwards 2300 gas which can fail for contract recipients
