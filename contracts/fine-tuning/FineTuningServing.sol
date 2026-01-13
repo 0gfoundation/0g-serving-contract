@@ -77,8 +77,25 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         bool occupied
     );
     event ServiceRemoved(address indexed user);
-    error InvalidVerifierInput(string reason);
 
+    // GAS-1 optimization: Custom errors for gas efficiency
+    error InvalidVerifierInput(string reason);
+    error InvalidLedgerAddress();
+    error PenaltyPercentageTooHigh(uint256 percentage);
+    error LockTimeOutOfRange(uint256 lockTime);
+    error LimitTooLarge(uint256 limit);
+    error TransferToLedgerFailed();
+    error ETHTransferFailed();
+    error DirectDepositsDisabled();
+    error DeliverableNotExists(string id);
+    error SecretShouldNotBeEmpty();
+    error SecretShouldBeEmpty();
+
+    /// @notice Initializes the contract with locktime and ledger address
+    /// @param _locktime The time period for refund locks
+    /// @param _ledgerAddress The address of the ledger contract
+    /// @param owner The owner address
+    /// @param _penaltyPercentage The penalty percentage for unacknowledged deliverables
     function initialize(
         uint _locktime,
         address _ledgerAddress,
@@ -86,11 +103,16 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint _penaltyPercentage
     ) public onlyInitializeOnce {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(_ledgerAddress != address(0) && _ledgerAddress.code.length > 0, "Invalid ledger address");
-        require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
-        require(_locktime <= 365 days, "lockTime too large");
+        if (_ledgerAddress == address(0) || _ledgerAddress.code.length == 0) {
+            revert InvalidLedgerAddress();
+        }
+        if (_penaltyPercentage > 100) {
+            revert PenaltyPercentageTooHigh(_penaltyPercentage);
+        }
         _transferOwnership(owner);
-        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+        if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
+            revert LockTimeOutOfRange(_locktime);
+        }
         $.lockTime = _locktime;
         $.ledgerAddress = _ledgerAddress;
         $.ledger = ILedger(_ledgerAddress);
@@ -103,16 +125,23 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         _;
     }
 
+    /// @notice Updates the lock time for refunds
+    /// @param _locktime The new lock time
     function updateLockTime(uint _locktime) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(_locktime <= 365 days, "lockTime too large");
-        require(_locktime >= MIN_LOCKTIME && _locktime <= MAX_LOCKTIME, "lockTime out of range");
+        if (_locktime < MIN_LOCKTIME || _locktime > MAX_LOCKTIME) {
+            revert LockTimeOutOfRange(_locktime);
+        }
         $.lockTime = _locktime;
     }
 
+    /// @notice Updates the penalty percentage for unacknowledged deliverables
+    /// @param _penaltyPercentage The new penalty percentage (0-100)
     function updatePenaltyPercentage(uint _penaltyPercentage) public onlyOwner {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(_penaltyPercentage <= 100, "penaltyPercentage > 100");
+        if (_penaltyPercentage > 100) {
+            revert PenaltyPercentageTooHigh(_penaltyPercentage);
+        }
         $.penaltyPercentage = _penaltyPercentage;
     }
 
@@ -128,7 +157,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint limit
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit);
+        }
         return $.accountMap.getAllAccounts(offset, (limit == 0 ? 50 : limit));
     }
 
@@ -138,7 +169,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint limit
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit);
+        }
         return $.accountMap.getAccountsByProvider(provider, offset, (limit == 0 ? 50 : limit));
     }
 
@@ -148,7 +181,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         uint limit
     ) public view returns (AccountSummary[] memory accounts, uint total) {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(limit == 0 || limit <= 50, "Limit too large");
+        if (limit != 0 && limit > 50) {
+            revert LimitTooLarge(limit);
+        }
         return $.accountMap.getAccountsByUser(user, offset, (limit == 0 ? 50 : limit));
     }
 
@@ -205,9 +240,13 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         if (totalAmount == 0) {
             return (0, balance, pendingRefund);
         }
-        (bool success, ) = payable(msg.sender).call{value: totalAmount}("");
-        require(success, "transfer to ledger failed");
+        // HIGH-3 FIX: Emit event BEFORE external call (CEI pattern)
         emit BalanceUpdated(user, provider, balance, pendingRefund);
+
+        (bool success, ) = payable(msg.sender).call{value: totalAmount}("");
+        if (!success) {
+            revert TransferToLedgerFailed();
+        }
     }
 
     function getService(address provider) public view returns (Service memory service) {
@@ -270,7 +309,10 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         return $.accountMap.getDeliverables(user, provider);
     }
 
-    function settleFees(VerifierInput calldata verifierInput) external {
+    /// @notice Settles fees for a completed deliverable with TEE signature verification
+    /// @param verifierInput The verifier input containing signature and deliverable data
+    /// @dev CRIT-4 FIX: Added nonReentrant modifier to prevent reentrancy attacks
+    function settleFees(VerifierInput calldata verifierInput) external nonReentrant {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         Account storage account = $.accountMap.getAccount(verifierInput.user, msg.sender);
 
@@ -287,25 +329,29 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
         // Validate deliverable exists
         if (bytes(account.deliverables[verifierInput.id].id).length == 0) {
-            revert("Deliverable does not exist");
+            revert DeliverableNotExists(verifierInput.id);
         }
         Deliverable storage deliverable = account.deliverables[verifierInput.id];
         if (keccak256(deliverable.modelRootHash) != keccak256(verifierInput.modelRootHash)) {
             revert InvalidVerifierInput("model root hash mismatch");
         }
 
-        // Verify TEE signature
-        bool teePassed = verifierInput.verifySignature(account.providerSigner);
+        // Verify TEE signature using EIP-712
+        bool teePassed = verifierInput.verifySignature(account.providerSigner, address(this));
         if (!teePassed) {
             revert InvalidVerifierInput("TEE settlement validation failed");
         }
 
         uint fee = verifierInput.taskFee;
         if (deliverable.acknowledged) {
-            require(verifierInput.encryptedSecret.length != 0, "secret should not be empty");
+            if (verifierInput.encryptedSecret.length == 0) {
+                revert SecretShouldNotBeEmpty();
+            }
             deliverable.encryptedSecret = verifierInput.encryptedSecret;
         } else {
-            require(verifierInput.encryptedSecret.length == 0, "secret should be empty");
+            if (verifierInput.encryptedSecret.length != 0) {
+                revert SecretShouldBeEmpty();
+            }
             fee = (fee * $.penaltyPercentage) / 100;
         }
 
@@ -313,6 +359,10 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         _settleFees(account, fee);
     }
 
+    /// @notice Internal function to settle fees with the provider
+    /// @param account The account storage reference
+    /// @param amount The amount to settle
+    /// @dev CRIT-3 FIX: Uses call() instead of transfer() to avoid 2300 gas limit issues
     function _settleFees(Account storage account, uint amount) private {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         uint availableBalance = account.balance - account.pendingRefund;
@@ -348,7 +398,13 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         account.balance -= amount;
         $.ledger.spendFund(account.user, amount);
         emit BalanceUpdated(account.user, msg.sender, account.balance, account.pendingRefund);
-        payable(msg.sender).transfer(amount);
+
+        // CRIT-3 FIX: Use call() instead of transfer() to support contracts with expensive receive() fallbacks
+        // transfer() only forwards 2300 gas which can fail for contract recipients
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        if (!success) {
+            revert ETHTransferFailed();
+        }
     }
 
     // === ERC165 Support ===
@@ -358,6 +414,6 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     }
 
     receive() external payable {
-        revert("Direct deposits disabled; use LedgerManager");
+        revert DirectDepositsDisabled();
     }
 }
