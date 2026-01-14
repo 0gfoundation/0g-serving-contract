@@ -93,10 +93,10 @@ describe("Fine tuning serving", () => {
 
             serving
                 .connect(provider1)
-                .addOrUpdateService(provider1Url, provider1Quota, provider1PricePerToken, provider1Signer, false, []),
+                .addOrUpdateService(provider1Url, provider1Quota, provider1PricePerToken, false, [], provider1Signer, { value: ethers.parseEther("100") }),
             serving
                 .connect(provider2)
-                .addOrUpdateService(provider2Url, provider2Quota, provider2PricePerToken, provider2Signer, false, []),
+                .addOrUpdateService(provider2Url, provider2Quota, provider2PricePerToken, false, [], provider2Signer, { value: ethers.parseEther("100") }),
         ]);
     });
 
@@ -369,7 +369,7 @@ describe("Fine tuning serving", () => {
             expect(service.quota.nodeStorage).to.equal(provider1Quota.nodeStorage);
             expect(service.quota.gpuType).to.equal(provider1Quota.gpuType);
             expect(service.pricePerToken).to.equal(provider1PricePerToken);
-            expect(service.providerSigner).to.equal(provider1Signer);
+            expect(service.teeSignerAddress).to.equal(provider1Signer);
             expect(service.occupied).to.equal(false);
         });
 
@@ -378,13 +378,13 @@ describe("Fine tuning serving", () => {
             const addresses = (services as ServiceStructOutput[]).map((s) => s.provider);
             const urls = (services as ServiceStructOutput[]).map((s) => s.url);
             const pricePerTokens = (services as ServiceStructOutput[]).map((s) => s.pricePerToken);
-            const providerSigners = (services as ServiceStructOutput[]).map((s) => s.providerSigner);
+            const teeSignerAddresses = (services as ServiceStructOutput[]).map((s) => s.teeSignerAddress);
             const occupieds = (services as ServiceStructOutput[]).map((s) => s.occupied);
 
             expect(addresses).to.have.members([provider1Address, provider2Address]);
             expect(urls).to.have.members([provider1Url, provider2Url]);
             expect(pricePerTokens).to.have.members([BigInt(provider1PricePerToken), BigInt(provider2PricePerToken)]);
-            expect(providerSigners).to.have.members([provider1Signer, provider2Signer]);
+            expect(teeSignerAddresses).to.have.members([provider1Signer, provider2Signer]);
             expect(occupieds).to.have.members([false, false]);
         });
 
@@ -409,9 +409,9 @@ describe("Fine tuning serving", () => {
                         modifiedPriceUrl,
                         modifiedQuota,
                         modifiedPricePerToken,
-                        modifiedProviderSinger,
                         modifiedOccupied,
-                        modifiedModels
+                        modifiedModels,
+                        modifiedProviderSinger
                     )
             )
                 .to.emit(serving, "ServiceUpdated")
@@ -420,8 +420,8 @@ describe("Fine tuning serving", () => {
                     modifiedPriceUrl,
                     Object.values(modifiedQuota),
                     modifiedPricePerToken,
-                    (providerSinger: string) => {
-                        return providerSinger.toLowerCase() === modifiedProviderSinger;
+                    (teeSignerAddress: string) => {
+                        return teeSignerAddress.toLowerCase() === modifiedProviderSinger;
                     },
                     modifiedOccupied
                 );
@@ -435,7 +435,7 @@ describe("Fine tuning serving", () => {
             expect(service.quota.nodeStorage).to.equal(modifiedQuota.nodeStorage);
             expect(service.quota.gpuType).to.equal(modifiedQuota.gpuType);
             expect(service.pricePerToken).to.equal(modifiedPricePerToken);
-            expect(service.providerSigner.toLowerCase()).to.equal(modifiedProviderSinger);
+            expect(service.teeSignerAddress.toLowerCase()).to.equal(modifiedProviderSinger);
             expect(service.occupied).to.equal(modifiedOccupied);
             expect(service.models.length).to.equal(modifiedModels.length);
             for (const index in modifiedModels) {
@@ -461,10 +461,12 @@ describe("Fine tuning serving", () => {
         let deliverableId: string;
 
         beforeEach(async () => {
-            await serving.acknowledgeProviderSigner(provider1, provider1Signer);
+            // Owner acknowledges the service's TEE signer
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
+            // User acknowledges the provider (note: auto-acknowledged when transferring funds in beforeEach)
             deliverableId = ethers.hexlify(ethers.randomBytes(32));
             await serving.connect(provider1).addDeliverable(ownerAddress, deliverableId, modelRootHash);
-            await serving.acknowledgeDeliverable(provider1, deliverableId);
+            await serving.acknowledgeDeliverable(provider1Address, deliverableId);
 
             verifierInput = {
                 taskFee,
@@ -472,7 +474,6 @@ describe("Fine tuning serving", () => {
                 modelRootHash,
                 id: deliverableId,
                 nonce: BigInt(1),
-                providerSigner: provider1Signer,
                 user: ownerAddress,
                 signature: "",
             };
@@ -527,7 +528,9 @@ describe("Fine tuning serving", () => {
         let deliverableId: string;
 
         beforeEach(async () => {
-            await serving.acknowledgeProviderSigner(provider1, provider1Signer);
+            // Owner acknowledges the service's TEE signer
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
+            // User acknowledges the provider (note: auto-acknowledged when transferring funds in beforeEach)
             deliverableId = ethers.hexlify(ethers.randomBytes(32));
             await serving.connect(provider1).addDeliverable(ownerAddress, deliverableId, modelRootHash);
 
@@ -537,7 +540,6 @@ describe("Fine tuning serving", () => {
                 modelRootHash,
                 id: deliverableId,
                 nonce: BigInt(1),
-                providerSigner: provider1Signer,
                 user: ownerAddress,
                 signature: "",
             };
@@ -571,8 +573,8 @@ describe("Fine tuning serving", () => {
         const MAX_DELIVERABLES_PER_ACCOUNT = 20;
 
         it("should allow adding deliverables up to the limit", async () => {
-            // MED-4: Must acknowledge provider signer before adding deliverables
-            await serving.acknowledgeProviderSigner(provider1, provider1Signer);
+            // Owner acknowledges the service's TEE signer
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
 
             // Add deliverables up to the limit (MED-4: must acknowledge each before adding next)
             for (let i = 0; i < MAX_DELIVERABLES_PER_ACCOUNT; i++) {
@@ -580,16 +582,16 @@ describe("Fine tuning serving", () => {
                 const modelRootHash = ethers.hexlify(ethers.randomBytes(32));
                 await serving.connect(provider1).addDeliverable(ownerAddress, deliverableId, modelRootHash);
                 // MED-4: Acknowledge immediately to allow adding next deliverable
-                await serving.acknowledgeDeliverable(provider1, deliverableId);
+                await serving.acknowledgeDeliverable(provider1Address, deliverableId);
             }
 
-            const account = await serving.getAccount(ownerAddress, provider1);
+            const account = await serving.getAccount(ownerAddress, provider1Address);
             expect(account.deliverables.length).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
         });
 
         it("should use circular array strategy when adding deliverables beyond the limit", async () => {
-            // MED-4: Must acknowledge provider signer before adding deliverables
-            await serving.acknowledgeProviderSigner(provider1, provider1Signer);
+            // Owner acknowledges the service's TEE signer
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
 
             // Store deliverable IDs to verify circular array behavior
             const deliverableIds: string[] = [];
@@ -603,10 +605,10 @@ describe("Fine tuning serving", () => {
                 modelHashes.push(modelRootHash);
                 await serving.connect(provider1).addDeliverable(ownerAddress, deliverableId, modelRootHash);
                 // MED-4: Acknowledge immediately to allow adding next deliverable
-                await serving.acknowledgeDeliverable(provider1, deliverableId);
+                await serving.acknowledgeDeliverable(provider1Address, deliverableId);
             }
 
-            let account = await serving.getAccount(ownerAddress, provider1);
+            let account = await serving.getAccount(ownerAddress, provider1Address);
             expect(account.deliverables.length).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
             expect(account.deliverablesCount).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
             expect(account.deliverablesHead).to.equal(0);
@@ -622,9 +624,9 @@ describe("Fine tuning serving", () => {
             const newId1 = ethers.hexlify(ethers.randomBytes(32));
             const newHash1 = ethers.hexlify(ethers.randomBytes(32));
             await serving.connect(provider1).addDeliverable(ownerAddress, newId1, newHash1);
-            await serving.acknowledgeDeliverable(provider1, newId1);
+            await serving.acknowledgeDeliverable(provider1Address, newId1);
 
-            account = await serving.getAccount(ownerAddress, provider1);
+            account = await serving.getAccount(ownerAddress, provider1Address);
             expect(account.deliverables.length).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
             expect(account.deliverablesCount).to.equal(MAX_DELIVERABLES_PER_ACCOUNT);
             expect(account.deliverablesHead).to.equal(1); // Head moved to next position
@@ -710,7 +712,7 @@ async function backfillVerifierInput(privateKey: string, v: VerifierInputStruct,
     // EIP-712 Domain Separator
     const DOMAIN_TYPEHASH = newEthers.id("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     const MESSAGE_TYPEHASH = newEthers.id(
-        "VerifierMessage(string id,bytes encryptedSecret,bytes modelRootHash,uint256 nonce,address providerSigner,uint256 taskFee,address user)"
+        "VerifierMessage(string id,bytes encryptedSecret,bytes modelRootHash,uint256 nonce,uint256 taskFee,address user)"
     );
     const DOMAIN_NAME = "0G Fine-Tuning Serving";
     const DOMAIN_VERSION = "1";
@@ -735,14 +737,13 @@ async function backfillVerifierInput(privateKey: string, v: VerifierInputStruct,
     // Compute struct hash
     const structHash = newEthers.keccak256(
         newEthers.AbiCoder.defaultAbiCoder().encode(
-            ["bytes32", "bytes32", "bytes32", "bytes32", "uint256", "address", "uint256", "address"],
+            ["bytes32", "bytes32", "bytes32", "bytes32", "uint256", "uint256", "address"],
             [
                 MESSAGE_TYPEHASH,
                 newEthers.id(v.id),  // CRIT-2 FIX: Include 'id' to prevent signature reuse
                 newEthers.keccak256(v.encryptedSecret),
                 newEthers.keccak256(v.modelRootHash),
                 v.nonce,
-                v.providerSigner,
                 v.taskFee,
                 v.user
             ]

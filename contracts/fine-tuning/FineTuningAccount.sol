@@ -66,12 +66,12 @@ struct Account {
     uint pendingRefund;
     Refund[] refunds;
     string additionalInfo;
-    address providerSigner;
     mapping(string => Deliverable) deliverables; // ID -> Deliverable mapping
     string[MAX_DELIVERABLES_PER_ACCOUNT] deliverableIds; // Circular array of IDs
     uint validRefundsLength; // Track the number of valid (non-dirty) refunds
     uint deliverablesHead; // Circular array head pointer (oldest position)
     uint deliverablesCount; // Current count of deliverables
+    bool acknowledged; // Whether user has acknowledged this provider's TEE signer
 }
 
 struct Refund {
@@ -99,9 +99,9 @@ struct AccountSummary {
     uint balance;
     uint pendingRefund;
     string additionalInfo;
-    address providerSigner;
     uint validRefundsLength;
     uint deliverablesCount;
+    bool acknowledged;
 }
 
 struct AccountDetails {
@@ -112,11 +112,11 @@ struct AccountDetails {
     uint pendingRefund;
     Refund[] refunds;
     string additionalInfo;
-    address providerSigner;
     Deliverable[] deliverables; // For backward compatibility, we'll populate this from the mapping
     uint validRefundsLength;
     uint deliverablesHead;
     uint deliverablesCount;
+    bool acknowledged;
 }
 
 library AccountLibrary {
@@ -135,11 +135,11 @@ library AccountLibrary {
     error RefundLocked(address user, address provider, uint index);
     error TooManyRefunds(address user, address provider);
     error AdditionalInfoTooLong();
-    error ProviderSignerZeroAddress();
     error DeliverableNotExists(string id);
     error DeliverableAlreadyExists(string id);
     error DeliverableIdInvalidLength(uint256 length);
     error PreviousDeliverableNotAcknowledged(string id);
+    error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -177,11 +177,11 @@ library AccountLibrary {
             pendingRefund: account.pendingRefund,
             refunds: account.refunds,
             additionalInfo: account.additionalInfo,
-            providerSigner: account.providerSigner,
             deliverables: deliverables,
             validRefundsLength: account.validRefundsLength,
             deliverablesHead: account.deliverablesHead,
-            deliverablesCount: account.deliverablesCount
+            deliverablesCount: account.deliverablesCount,
+            acknowledged: account.acknowledged
         });
     }
 
@@ -213,9 +213,9 @@ library AccountLibrary {
                 balance: fullAccount.balance,
                 pendingRefund: fullAccount.pendingRefund,
                 additionalInfo: fullAccount.additionalInfo,
-                providerSigner: fullAccount.providerSigner,
                 validRefundsLength: fullAccount.validRefundsLength,
-                deliverablesCount: fullAccount.deliverablesCount
+                deliverablesCount: fullAccount.deliverablesCount,
+                acknowledged: fullAccount.acknowledged
             });
             unchecked { ++i; }
         }
@@ -252,9 +252,9 @@ library AccountLibrary {
                 balance: fullAccount.balance,
                 pendingRefund: fullAccount.pendingRefund,
                 additionalInfo: fullAccount.additionalInfo,
-                providerSigner: fullAccount.providerSigner,
                 validRefundsLength: fullAccount.validRefundsLength,
-                deliverablesCount: fullAccount.deliverablesCount
+                deliverablesCount: fullAccount.deliverablesCount,
+                acknowledged: fullAccount.acknowledged
             });
             unchecked { ++i; }
         }
@@ -293,9 +293,9 @@ library AccountLibrary {
                 balance: fullAccount.balance,
                 pendingRefund: fullAccount.pendingRefund,
                 additionalInfo: fullAccount.additionalInfo,
-                providerSigner: fullAccount.providerSigner,
                 validRefundsLength: fullAccount.validRefundsLength,
-                deliverablesCount: fullAccount.deliverablesCount
+                deliverablesCount: fullAccount.deliverablesCount,
+                acknowledged: fullAccount.acknowledged
             });
             unchecked { ++i; }
         }
@@ -322,9 +322,9 @@ library AccountLibrary {
                     balance: fullAccount.balance,
                     pendingRefund: fullAccount.pendingRefund,
                     additionalInfo: fullAccount.additionalInfo,
-                    providerSigner: fullAccount.providerSigner,
                     validRefundsLength: fullAccount.validRefundsLength,
-                    deliverablesCount: fullAccount.deliverablesCount
+                    deliverablesCount: fullAccount.deliverablesCount,
+                    acknowledged: fullAccount.acknowledged
                 });
             }
             unchecked { ++i; }
@@ -385,7 +385,7 @@ library AccountLibrary {
         // Clear all balance and state data
         account.balance = 0;
         account.pendingRefund = 0;
-        account.providerSigner = address(0);
+        account.acknowledged = false;
         account.validRefundsLength = 0;
 
         // IMPORTANT: Must explicitly delete each deliverable from mapping
@@ -569,30 +569,6 @@ library AccountLibrary {
         balance = account.balance;
     }
 
-    /// @notice Allows user to acknowledge a provider's signing address for TEE verification
-    /// @param map The account map storage
-    /// @param user The user address
-    /// @param provider The provider address
-    /// @param providerSigner The provider's TEE signer address
-    /// @dev HIGH-4 FIX: Added zero-address validation to prevent setting invalid signer
-    function acknowledgeProviderSigner(
-        AccountMap storage map,
-        address user,
-        address provider,
-        address providerSigner
-    ) internal {
-        // HIGH-4 FIX: Validate providerSigner is not zero address
-        if (providerSigner == address(0)) {
-            revert ProviderSignerZeroAddress();
-        }
-
-        if (!_contains(map, _key(user, provider))) {
-            revert AccountNotExists(user, provider);
-        }
-        Account storage account = _get(map, user, provider);
-        account.providerSigner = providerSigner;
-    }
-
     function acknowledgeDeliverable(
         AccountMap storage map,
         address user,
@@ -611,6 +587,29 @@ library AccountLibrary {
 
         // Mark as acknowledged
         account.deliverables[id].acknowledged = true;
+    }
+
+    /// @notice Allows user to acknowledge or revoke acknowledgement of a provider's TEE signer
+    /// @param map The account map storage
+    /// @param user The user address
+    /// @param provider The provider address
+    /// @param acknowledged Whether to acknowledge (true) or revoke (false)
+    function acknowledgeTEESigner(
+        AccountMap storage map,
+        address user,
+        address provider,
+        bool acknowledged
+    ) internal {
+        Account storage account = _get(map, user, provider);
+
+        // Once acknowledged as true, can only be set back to false if balance is zero
+        if (account.acknowledged && !acknowledged) {
+            if (account.balance != 0) {
+                revert CannotRevokeWithNonZeroBalance(user, provider, account.balance);
+            }
+        }
+
+        account.acknowledged = acknowledged;
     }
 
     // provider functions
