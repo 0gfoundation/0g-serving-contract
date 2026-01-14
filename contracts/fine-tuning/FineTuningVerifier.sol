@@ -10,7 +10,6 @@ struct VerifierInput {
     bytes encryptedSecret;
     bytes modelRootHash;
     uint nonce;
-    address providerSigner;
     bytes signature;
     uint taskFee;
     address user;
@@ -29,7 +28,7 @@ library VerifierLibrary {
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant MESSAGE_TYPEHASH =
         keccak256(
-            "VerifierMessage(string id,bytes encryptedSecret,bytes modelRootHash,uint256 nonce,address providerSigner,uint256 taskFee,address user)"
+            "VerifierMessage(string id,bytes encryptedSecret,bytes modelRootHash,uint256 nonce,uint256 taskFee,address user)"
         );
 
     string private constant DOMAIN_NAME = "0G Fine-Tuning Serving";
@@ -72,7 +71,6 @@ library VerifierLibrary {
                 keccak256(input.encryptedSecret),
                 keccak256(input.modelRootHash),
                 input.nonce,
-                input.providerSigner,
                 input.taskFee,
                 input.user
             )
