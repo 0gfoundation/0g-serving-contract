@@ -34,6 +34,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         AccountLibrary.AccountMap accountMap;
         ServiceLibrary.ServiceMap serviceMap;
         uint penaltyPercentage;
+        mapping(address => uint) providerStake; // Service provider stake amounts
     }
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.finetuning.v1.0")) - 1)) & ~bytes32(uint256(0xff))
@@ -43,6 +44,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     // Enforce sane lockTime to avoid instant bypass (0) or excessive freeze (> 7 days)
     uint public constant MIN_LOCKTIME = 1 hours;
     uint public constant MAX_LOCKTIME = 7 days;
+
+    // Service provider stake requirement
+    uint public constant MIN_PROVIDER_STAKE = 100 ether; // 100 0G minimum stake
 
     function _getFineTuningServingStorage() private pure returns (FineTuningServingStorage storage $) {
         assembly {
@@ -73,12 +77,15 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         string url,
         Quota quota,
         uint pricePerToken,
-        address providerSigner,
+        address teeSignerAddress,
         bool occupied
     );
     event ServiceRemoved(address indexed user);
     event AccountDeleted(address indexed user, address indexed provider, uint256 refundedAmount);
     event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
+    event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
+    event ProviderStaked(address indexed provider, uint amount);
+    event ProviderStakeReturned(address indexed provider, uint amount);
 
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
@@ -89,9 +96,10 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     error TransferToLedgerFailed();
     error ETHTransferFailed();
     error DirectDepositsDisabled();
-    error DeliverableNotExists(string id);
     error SecretShouldNotBeEmpty();
     error SecretShouldBeEmpty();
+    error CannotAddStakeWhenUpdating();
+    error InsufficientStake(uint256 provided, uint256 required);
 
     /// @notice Initializes the contract with locktime and ledger address
     /// @param _locktime The time period for refund locks
@@ -222,6 +230,10 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function addAccount(address user, address provider, string memory additionalInfo) external payable onlyLedger {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         (uint balance, uint pendingRefund) = $.accountMap.addAccount(user, provider, msg.value, additionalInfo);
+
+        // Auto-acknowledge TEE signer when user transfers funds to provider
+        $.accountMap.acknowledgeTEESigner(user, provider, true);
+
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -239,6 +251,13 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
             cancelRetrievingAmount,
             msg.value
         );
+
+        // Auto-acknowledge TEE signer when user deposits funds to provider (if not already acknowledged)
+        Account storage account = $.accountMap.getAccount(user, provider);
+        if (!account.acknowledged) {
+            $.accountMap.acknowledgeTEESigner(user, provider, true);
+        }
+
         emit BalanceUpdated(user, provider, balance, pendingRefund);
     }
 
@@ -275,14 +294,28 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         services = $.serviceMap.getAllServices();
     }
 
-    function acknowledgeProviderSigner(address provider, address providerSigner) external {
-        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        $.accountMap.acknowledgeProviderSigner(msg.sender, provider, providerSigner);
-    }
-
     function acknowledgeDeliverable(address provider, string calldata id) external {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.acknowledgeDeliverable(msg.sender, provider, id);
+    }
+
+    function acknowledgeTEESignerByOwner(address provider) external onlyOwner {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        Service storage service = $.serviceMap.getService(provider);
+        $.serviceMap.acknowledgeTEESigner(provider);
+        emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, true);
+    }
+
+    function acknowledgeTEESigner(address provider, bool acknowledged) external {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        $.accountMap.acknowledgeTEESigner(msg.sender, provider, acknowledged);
+    }
+
+    function revokeTEESignerAcknowledgement(address provider) external onlyOwner {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        Service storage service = $.serviceMap.getService(provider);
+        $.serviceMap.revokeTEESignerAcknowledgement(provider);
+        emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, false);
     }
 
     // provider functions
@@ -291,19 +324,50 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         string calldata url,
         Quota memory quota,
         uint pricePerToken,
-        address providerSigner,
         bool occupied,
-        string[] memory models
-    ) external {
+        string[] memory models,
+        address teeSignerAddress
+    ) external payable {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        $.serviceMap.addOrUpdateService(msg.sender, url, quota, pricePerToken, providerSigner, occupied, models);
-        emit ServiceUpdated(msg.sender, url, quota, pricePerToken, providerSigner, occupied);
+        if ($.providerStake[msg.sender] > 0) {
+            // Updating existing service: cannot add more stake
+            if (msg.value != 0) {
+                revert CannotAddStakeWhenUpdating();
+            }
+        } else {
+            // First time registration: require stake
+            if (msg.value < MIN_PROVIDER_STAKE) {
+                revert InsufficientStake(msg.value, MIN_PROVIDER_STAKE);
+            }
+            $.providerStake[msg.sender] = msg.value;
+
+            emit ProviderStaked(msg.sender, msg.value);
+        }
+
+        $.serviceMap.addOrUpdateService(msg.sender, url, quota, pricePerToken, occupied, models, teeSignerAddress);
+        emit ServiceUpdated(msg.sender, url, quota, pricePerToken, teeSignerAddress, occupied);
     }
 
-    function removeService() external {
+    function removeService() external nonReentrant {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.serviceMap.removeService(msg.sender);
-        emit ServiceRemoved(msg.sender);
+
+        // Return stake if any
+        uint stake = $.providerStake[msg.sender];
+        if (stake > 0) {
+            $.providerStake[msg.sender] = 0;
+
+            // Emit events before external call to prevent reentrancy-caused event ordering issues
+            emit ProviderStakeReturned(msg.sender, stake);
+            emit ServiceRemoved(msg.sender);
+
+            (bool success, ) = payable(msg.sender).call{value: stake}("");
+            if (!success) {
+                revert ETHTransferFailed();
+            }
+        } else {
+            emit ServiceRemoved(msg.sender);
+        }
     }
 
     function addDeliverable(address user, string calldata id, bytes memory modelRootHash) external {
@@ -332,15 +396,17 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function settleFees(VerifierInput calldata verifierInput) external nonReentrant {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         Account storage account = $.accountMap.getAccount(verifierInput.user, msg.sender);
+        Service storage service = $.serviceMap.getService(msg.sender);
+
+        // Validate TEE signer acknowledgement - both user and service must be acknowledged, and service must have valid TEE signer address
+        if (!account.acknowledged || !service.teeSignerAcknowledged || service.teeSignerAddress == address(0)) {
+            revert InvalidVerifierInput("TEE signer not acknowledged");
+        }
 
         // GAS-2: Cache frequently accessed storage variables
-        address providerSigner = account.providerSigner;
         uint accountNonce = account.nonce;
 
         // Group all validation checks together for gas efficiency
-        if (providerSigner != verifierInput.providerSigner) {
-            revert InvalidVerifierInput("provider signing address is not acknowledged");
-        }
         if (accountNonce >= verifierInput.nonce) {
             revert InvalidVerifierInput("nonce should larger than the current nonce");
         }
@@ -350,15 +416,15 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
         // Validate deliverable exists
         if (bytes(account.deliverables[verifierInput.id].id).length == 0) {
-            revert DeliverableNotExists(verifierInput.id);
+            revert AccountLibrary.DeliverableNotExists(verifierInput.id);
         }
         Deliverable storage deliverable = account.deliverables[verifierInput.id];
         if (keccak256(deliverable.modelRootHash) != keccak256(verifierInput.modelRootHash)) {
             revert InvalidVerifierInput("model root hash mismatch");
         }
 
-        // Verify TEE signature using EIP-712 (uses cached providerSigner)
-        bool teePassed = verifierInput.verifySignature(providerSigner, address(this));
+        // Verify TEE signature using EIP-712 (uses service.teeSignerAddress)
+        bool teePassed = verifierInput.verifySignature(service.teeSignerAddress, address(this));
         if (!teePassed) {
             revert InvalidVerifierInput("TEE settlement validation failed");
         }
