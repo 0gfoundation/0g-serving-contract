@@ -30,10 +30,17 @@ contract Initializable {
     event Initialized(uint8 version);
 
     /**
+     * @dev Emitted when attempting to initialize an already initialized or locked contract.
+     */
+    error AlreadyInitialized();
+
+    /**
      * @dev A modifier that defines a protected initializer function that can be invoked at most once.
      */
     modifier onlyInitializeOnce() {
-        require(!initialized && !_initializationLocked, "Initializable: already initialized");
+        if (initialized || _initializationLocked) {
+            revert AlreadyInitialized();
+        }
         initialized = true;
         _;
         emit Initialized(1);

@@ -131,6 +131,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error NoSettlementsProvided();
     error TooManySettlements(uint256 count, uint256 max);
     error ProviderCannotBeUser();
+    error DirectDepositsDisabled();
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -788,6 +789,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     receive() external payable {
-        revert("Direct deposits disabled; use LedgerManager");
+        revert DirectDepositsDisabled();
     }
 }
