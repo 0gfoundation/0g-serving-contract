@@ -132,6 +132,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     error ServiceRegistryLimitReached(uint256 limit);
     error NoRecommendedService(string serviceType);
     error NoServicesRegistered();
+    error StartUserIndexOutOfBounds(uint256 index, uint256 max);
+    error ProviderCountMismatchInMigration(uint256 newCount, uint256 expectedCount);
+    error DirectDepositsDisabled();
 
     struct LedgerMap {
         EnumerableSet.Bytes32Set _keys;
@@ -662,7 +665,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         }
 
         // Validate startUserIndex
-        require(startUserIndex < ledgerCount, "LedgerManager: startUserIndex out of bounds");
+        if (startUserIndex >= ledgerCount) {
+            revert StartUserIndexOutOfBounds(startUserIndex, ledgerCount - 1);
+        }
 
         // Calculate end index: if batchSize is 0, process all remaining
         uint256 endUserIndex;
@@ -701,10 +706,9 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
             }
 
             // Safety check: verify all providers were migrated successfully
-            require(
-                newProviders.length() == providerCount,
-                "LedgerManager: provider count mismatch in migration"
-            );
+            if (newProviders.length() != providerCount) {
+                revert ProviderCountMismatchInMigration(newProviders.length(), providerCount);
+            }
 
             // Clear old mapping to save storage
             for (uint256 k = 0; k < providerCount; k++) {
@@ -797,7 +801,7 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
         }
 
         // Regular users must use depositFund() or depositFundFor() for explicit deposits
-        revert("Direct deposits disabled; use depositFund() instead");
+        revert DirectDepositsDisabled();
     }
 
     function _isServiceContract(address sender) internal view returns (bool) {

@@ -47,6 +47,8 @@ library AccountLibrary {
     error TooManyRefunds(address user, address provider);
     error BatchSizeTooLarge(uint256 size, uint256 max);
     error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
+    error StartIndexOutOfBounds(uint256 index, uint256 max);
+    error AccountingMismatchInMigration(uint256 oldPendingRefund, uint256 newPendingRefund);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -457,7 +459,9 @@ library AccountLibrary {
         if (totalAccounts == 0) {
             return (0, 0, new address[](0), new uint[](0), new uint[](0));
         }
-        require(startIndex < totalAccounts, "InferenceAccount: startIndex out of bounds");
+        if (startIndex >= totalAccounts) {
+            revert StartIndexOutOfBounds(startIndex, totalAccounts - 1);
+        }
 
         // Calculate end index: if batchSize is 0, process all remaining
         uint endIndex;
@@ -512,7 +516,9 @@ library AccountLibrary {
 
                 // Safety check: ensure pendingRefund doesn't change
                 // If it changes, it indicates broken accounting (processed refunds should have amount=0)
-                require(oldPendingRefund == newPendingRefund, "InferenceAccount: accounting mismatch in migration");
+                if (oldPendingRefund != newPendingRefund) {
+                    revert AccountingMismatchInMigration(oldPendingRefund, newPendingRefund);
+                }
 
                 account.pendingRefund = newPendingRefund;
 
