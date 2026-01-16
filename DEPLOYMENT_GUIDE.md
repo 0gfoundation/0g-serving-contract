@@ -121,7 +121,7 @@ When releasing a new service version, follow these steps:
 
 **Important Note**: The main branch contains code for all services. Each release branch (e.g., `release/inference-v1`) is specific to a particular service version. Code for other services in a release branch should be considered inactive and not modified.
 
-Follow the scenarios below for detailed deployment and upgrade steps. And here we use zgTestnetV4 as the target network for all commands as examples.
+Follow the scenarios below for detailed deployment and upgrade steps. And here we use zgTestnetMigrate as the target network for all commands as examples.
 
 ## Scenario 1: Initial Contract Deployment
 
@@ -129,16 +129,16 @@ Follow the scenarios below for detailed deployment and upgrade steps. And here w
 
 ```bash
 # Deploy LedgerManager
-npx hardhat deploy --tags ledger --network zgTestnetV4
+npx hardhat deploy --tags ledger --network zgTestnetMigrate
 
 # Verify LedgerManager contract
-IMPL=$(cat deployments/zgTestnetV4/LedgerManagerImpl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/LedgerManagerBeacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/LedgerManager.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetMigrate/LedgerManagerImpl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetMigrate/LedgerManagerBeacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetMigrate/LedgerManager.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetMigrate
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 ```
 
 ### 1.2 Deploy Inference v1.0
@@ -148,19 +148,19 @@ npx hardhat upgrade:forceImportAll --network zgTestnetV4
 git checkout main
 
 # Deploy contract
-SERVICE_TYPE=inference SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
+SERVICE_TYPE=inference SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetMigrate
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetMigrate/InferenceServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetMigrate/InferenceServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetMigrate/InferenceServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetMigrate
 
 # Clean other service deployment files
-rm deployments/zgTestnetV4/FineTuningServing_*.json 2>/dev/null || true
+rm deployments/zgTestnetMigrate/FineTuningServing_*.json 2>/dev/null || true
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 
 # Create version info file
 cat > VERSION.json << EOF
@@ -193,20 +193,20 @@ git checkout main
 # Modify contract code (as needed)
 
 # Deploy new version
-SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
+SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags deploy-service --network zgTestnetMigrate
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v2.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v2.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v2.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetMigrate/InferenceServing_v2.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetMigrate/InferenceServing_v2.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetMigrate/InferenceServing_v2.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetMigrate
 
 # Clean other version deployment files
-rm deployments/zgTestnetV4/InferenceServing_v1.0*.json 2>/dev/null || true
-rm deployments/zgTestnetV4/FineTuningServing_*.json 2>/dev/null || true
+rm deployments/zgTestnetMigrate/InferenceServing_v1.0*.json 2>/dev/null || true
+rm deployments/zgTestnetMigrate/FineTuningServing_*.json 2>/dev/null || true
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 
 # Update version info file
 cat > VERSION.json << EOF
@@ -237,19 +237,19 @@ git checkout main
 git checkout main
 
 # Deploy fine-tuning service
-SERVICE_TYPE=fine-tuning SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetV4
+SERVICE_TYPE=fine-tuning SERVICE_VERSION=v1.0 npx hardhat deploy --tags deploy-service --network zgTestnetMigrate
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/FineTuningServing_v1.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetMigrate/FineTuningServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetMigrate/FineTuningServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetMigrate/FineTuningServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetMigrate
 
 # Clean other service deployment files
-rm deployments/zgTestnetV4/InferenceServing_*.json 2>/dev/null || true
+rm deployments/zgTestnetMigrate/InferenceServing_*.json 2>/dev/null || true
 
 # Import to OpenZeppelin
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 
 # Create version info file
 cat > VERSION.json << EOF
@@ -282,18 +282,18 @@ git checkout release/inference-v1.0
 # Modify contract code
 
 # Validate upgrade compatibility
-npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing --network zgTestnetV4
+npx hardhat upgrade:validate --old InferenceServing_v1.0 --new InferenceServing --network zgTestnetMigrate
 
 # Execute upgrade
-npx hardhat upgrade --name InferenceServing_v1.0 --artifact InferenceServing --execute true --network zgTestnetV4
+npx hardhat upgrade --name InferenceServing_v1.0 --artifact InferenceServing --execute true --network zgTestnetMigrate
 
-IMPL=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Impl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/InferenceServing_v1.0Beacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/InferenceServing_v1.0.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetMigrate/InferenceServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetMigrate/InferenceServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetMigrate/InferenceServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetMigrate
 
 # Re-import upgraded contracts
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 
 # Update version info (increment patch version)
 cat > VERSION.json << EOF
@@ -317,13 +317,13 @@ git checkout main
 
 ```bash
 # Set inference v2.0 as recommended version
-SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags set-recommended --network zgTestnetV4
+SERVICE_TYPE=inference SERVICE_VERSION=v2.0 npx hardhat deploy --tags set-recommended --network zgTestnetMigrate
 ```
 
 ## Scenario 6: List All Services
 
 ```bash
-npx hardhat deploy --tags list-services --network zgTestnetV4
+npx hardhat deploy --tags list-services --network zgTestnetMigrate
 ```
 
 ## Scenario 7: Upgrade LedgerManager (Public Infrastructure)
@@ -335,22 +335,22 @@ LedgerManager is public infrastructure shared by all service versions. After upg
 git checkout main
 
 # Validate upgrade compatibility
-npx hardhat upgrade:validate --old LedgerManager --new LedgerManager --network zgTestnetV4
+npx hardhat upgrade:validate --old LedgerManager --new LedgerManager --network zgTestnetMigrate
 
 # Execute upgrade
-npx hardhat upgrade --name LedgerManager --artifact LedgerManager --execute true --network zgTestnetV4
+npx hardhat upgrade --name LedgerManager --artifact LedgerManager --execute true --network zgTestnetMigrate
 
 # Verify contract
-IMPL=$(cat deployments/zgTestnetV4/LedgerManagerImpl.json | jq -r '.address')
-BEACON=$(cat deployments/zgTestnetV4/LedgerManagerBeacon.json | jq -r '.address')
-PROXY=$(cat deployments/zgTestnetV4/LedgerManager.json | jq -r '.address')
-IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetV4
+IMPL=$(cat deployments/zgTestnetMigrate/LedgerManagerImpl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetMigrate/LedgerManagerBeacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetMigrate/LedgerManager.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetMigrate
 
 # Re-import upgraded contracts
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 
 # Commit upgrade to main branch
-git add deployments/zgTestnetV4/LedgerManager*.json .openzeppelin/
+git add deployments/zgTestnetMigrate/LedgerManager*.json .openzeppelin/
 git commit -m "Upgrade LedgerManager"
 
 # Synchronize LedgerManager upgrade to all release branches
@@ -363,7 +363,7 @@ git checkout release/inference-v1
 git cherry-pick <ledger-upgrade-commit-hash>
 
 # Step 3: Re-import contracts (using updated LedgerManager)
-npx hardhat upgrade:forceImportAll --network zgTestnetV4
+npx hardhat upgrade:forceImportAll --network zgTestnetMigrate
 
 # Step 4: Commit and push updates to release branch
 git add deployments/ .openzeppelin/
