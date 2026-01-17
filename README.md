@@ -46,3 +46,4 @@ See [Deployment Guide](./DEPLOYMENT_GUIDE.md) for detailed instructions.
 
 - [0G Telegram](https://t.me/web3_0glabs)
 - [0G Discord](https://discord.com/invite/0glabs)
+- [OG X](https://x.com/0G_labs)
