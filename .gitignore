@@ -14,6 +14,12 @@ solcInputs
 zgTestnetDev
 zgTestnetDev-*
 
+# Migrate
+zgTestnetMigrate
+data
+
 _bmad
 
 .claude
+
+.env.testnet
