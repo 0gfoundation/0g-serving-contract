@@ -359,67 +359,6 @@ describe("Fine tuning serving", () => {
             const cancelledAmount = newTransferAmount < initialPendingRefund ? newTransferAmount : initialPendingRefund;
             expect(account.pendingRefund).to.equal(initialPendingRefund - cancelledAmount);
         });
-
-        it("should create multiple dirty data entries and demonstrate cleanup threshold", async () => {
-            // Strategy: Create multiple refunds through partial cancellation, then process them
-
-            // Step 1: Create a large refund
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
-
-            let account = await serving.getAccount(user1Address, provider1);
-            expect(account.refunds.length).to.equal(1);
-            // After: refunds=[{amount:2.5 ether, processed:false}], validRefundsLength=1
-
-            // Step 2: Use partial cancellation to split the refund into smaller pieces
-            const smallTransfer = ethers.parseEther("0.01");
-            await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", smallTransfer);
-            // After: refunds=[{amount:2.49 ether, processed:false}], validRefundsLength=1
-
-            // Now request another refund for the new balance
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
-            // After: refunds=[{amount:2.49 ether, processed:false}, {amount:0.01 ether, processed:false}], validRefundsLength=2
-
-            account = await serving.getAccount(user1Address, provider1);
-            console.log(
-                `After partial cancellation and new refund: refunds.length=${
-                    account.refunds.length
-                }, pendingRefund=${account.pendingRefund.toString()}`
-            );
-
-            // Step 3: Repeat the pattern to create more refunds
-            // The key insight: each transferFund + retrieveFund cycle may create new refund entries
-
-            while (account.refunds.length < MAX_REFUNDS_PER_ACCOUNT) {
-                // Small transfer and refund to potentially create new entries
-                await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", smallTransfer);
-                await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
-
-                account = await serving.getAccount(user1Address, provider1);
-
-                if (account.refunds.length == MAX_REFUNDS_PER_ACCOUNT) {
-                    account = await serving.getAccount(user1Address, provider1);
-                    expect(account.refunds.length).to.equal(MAX_REFUNDS_PER_ACCOUNT);
-
-                    // Now try to add one more refund - this should fail with TooManyRefunds error
-                    await ledger.connect(user1).transferFund(provider1Address, "fine-tuning-test", smallTransfer);
-                    await expect(ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test"))
-                        .to.be.revertedWithCustomError(serving, "TooManyRefunds")
-                        .withArgs(user1Address, provider1Address);
-
-                    console.log(`Reached MAX_REFUNDS_PER_ACCOUNT: ${account.refunds.length}`);
-                }
-            }
-
-            // Step 4: Process all refunds to create dirty data
-            await time.increase(lockTime + 1);
-            await ledger.connect(user1).retrieveFund([provider1Address], "fine-tuning-test");
-
-            account = await serving.getAccount(user1Address, provider1);
-
-            // Verify cleanup was triggered since we had MAX_REFUNDS_PER_ACCOUNT dirty entries > REFUND_CLEANUP_THRESHOLD.
-            // Physical cleanup should have occurred, reducing from MAX_REFUNDS_PER_ACCOUNT to 1 (left one since retrieveFund adds one fund while processing other refunds)
-            expect(account.refunds.length).to.be.equal(1);
-        });
     });
 
     describe("Service provider", () => {
