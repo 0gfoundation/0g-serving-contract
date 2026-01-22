@@ -2,10 +2,10 @@
   "manifestVersion": "3.2",
   "proxies": [],
   "impls": {
-    "e5d6eeded79a89aa333b58374c99ea3db66f1b86c3170195fb08fdf3657677d2": {
-      "address": "0xc1f206C90CE86a434b4D23775ca025a9b3641695",
+    "4c0e0f8499bfabbd91ae0f29fd762081ceef9799fbec31c020d4bb772c69b92c": {
+      "address": "0x26D8337315E65efFcF2EA13966c739486a28AC74",
       "layout": {
-        "solcVersion": "0.8.20",
+        "solcVersion": "0.8.22",
         "storage": [
           {
             "label": "_owner",
@@ -21,7 +21,15 @@
             "slot": "0",
             "type": "t_bool",
             "contract": "Initializable",
-            "src": "contracts/utils/Initializable.sol:5"
+            "src": "contracts/utils/Initializable.sol:19"
+          },
+          {
+            "label": "_initializationLocked",
+            "offset": 21,
+            "slot": "0",
+            "type": "t_bool",
+            "contract": "Initializable",
+            "src": "contracts/utils/Initializable.sol:25"
           },
           {
             "label": "_status",
@@ -49,10 +57,10 @@
         "namespaces": {}
       }
     },
-    "f55dcf66c70d5908126b36f91e57c40e47d2c240cdd5747dd3b425a474858662": {
-      "address": "0x010c54C9486c3bE0b22bB16F3d32d4f73409444a",
+    "a75b2b51359d878c8af96667723423eda19c2dfc0dde636fa69738d57b88bc7a": {
+      "address": "0xa5b6541bFaEA82E2827be0B298535386Ace2af15",
       "layout": {
-        "solcVersion": "0.8.20",
+        "solcVersion": "0.8.22",
         "storage": [
           {
             "label": "_owner",
@@ -68,7 +76,15 @@
             "slot": "0",
             "type": "t_bool",
             "contract": "Initializable",
-            "src": "contracts/utils/Initializable.sol:5"
+            "src": "contracts/utils/Initializable.sol:19"
+          },
+          {
+            "label": "_initializationLocked",
+            "offset": 21,
+            "slot": "0",
+            "type": "t_bool",
+            "contract": "Initializable",
+            "src": "contracts/utils/Initializable.sol:25"
           },
           {
             "label": "_status",
