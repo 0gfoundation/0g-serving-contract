@@ -47,8 +47,6 @@ library AccountLibrary {
     error TooManyRefunds(address user, address provider);
     error BatchSizeTooLarge(uint256 size, uint256 max);
     error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
-    error StartIndexOutOfBounds(uint256 index, uint256 max);
-    error AccountingMismatchInMigration(uint256 oldPendingRefund, uint256 newPendingRefund);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -427,117 +425,6 @@ library AccountLibrary {
         account.balance -= totalAmount;
         account.pendingRefund = pendingRefund;
         balance = account.balance;
-    }
-
-    /// @dev Migration function: Clean up old processed refunds for users of a provider
-    /// Should be called once after contract upgrade to clean all dirty data
-    /// This is a one-time migration utility, can be removed after migration completes
-    /// @param startIndex Index to start migration from (0-based, use 0 to start from beginning)
-    /// @param batchSize Maximum number of accounts to process (use 0 or type(uint).max for all remaining)
-    /// @return cleanedCount Number of accounts that had dirty data cleaned
-    /// @return nextIndex Index to continue from in next batch (equals totalAccounts when complete)
-    /// @return migratedUsers Array of user addresses that were migrated
-    /// @return migratedCounts Array of counts of refunds migrated per user
-    /// @return newValidLengths Array of new valid lengths per user
-    function migrateRefunds(
-        AccountMap storage map,
-        address provider,
-        uint startIndex,
-        uint batchSize
-    ) internal returns (
-        uint cleanedCount,
-        uint nextIndex,
-        address[] memory migratedUsers,
-        uint[] memory migratedCounts,
-        uint[] memory newValidLengths
-    ) {
-        cleanedCount = 0;
-        EnumerableSet.Bytes32Set storage providerKeys = map._providerIndex[provider];
-        uint totalAccounts = providerKeys.length();
-
-        // Validate startIndex
-        if (totalAccounts == 0) {
-            return (0, 0, new address[](0), new uint[](0), new uint[](0));
-        }
-        if (startIndex >= totalAccounts) {
-            revert StartIndexOutOfBounds(startIndex, totalAccounts - 1);
-        }
-
-        // Calculate end index: if batchSize is 0, process all remaining
-        uint endIndex;
-        if (batchSize == 0 || batchSize > totalAccounts - startIndex) {
-            endIndex = totalAccounts;
-        } else {
-            endIndex = startIndex + batchSize;
-        }
-
-        // Pre-allocate arrays for event data (max size = batch size)
-        uint batchLength = endIndex - startIndex;
-        migratedUsers = new address[](batchLength);
-        migratedCounts = new uint[](batchLength);
-        newValidLengths = new uint[](batchLength);
-
-        for (uint j = startIndex; j < endIndex; j++) {
-            bytes32 key = providerKeys.at(j);
-            Account storage account = map._values[key];
-
-            if (account.validRefundsLength == 0) {
-                continue;
-            }
-
-            // Clean up old dirty data (processed=true) if present
-            uint writeIndex = 0;
-            bool hasDirty = false;
-            uint dirtyCount = 0;
-            uint validRefundsLen = account.validRefundsLength;
-            for (uint i = 0; i < validRefundsLen; i++) {
-                if (!account.refunds[i].processed) {
-                    if (i != writeIndex) {
-                        account.refunds[writeIndex] = account.refunds[i];
-                        account.refunds[writeIndex].index = writeIndex;
-                    }
-                    writeIndex++;
-                } else {
-                    hasDirty = true;
-                    dirtyCount++;
-                }
-            }
-
-            if (hasDirty) {
-                // Store old pendingRefund for safety check
-                uint oldPendingRefund = account.pendingRefund;
-
-                account.validRefundsLength = writeIndex;
-                // Recalculate pendingRefund after cleanup
-                uint newPendingRefund = 0;
-                for (uint i = 0; i < writeIndex; i++) {
-                    newPendingRefund += account.refunds[i].amount;
-                }
-
-                // Safety check: ensure pendingRefund doesn't change
-                // If it changes, it indicates broken accounting (processed refunds should have amount=0)
-                if (oldPendingRefund != newPendingRefund) {
-                    revert AccountingMismatchInMigration(oldPendingRefund, newPendingRefund);
-                }
-
-                account.pendingRefund = newPendingRefund;
-
-                // Record migration data for event
-                migratedUsers[cleanedCount] = account.user;
-                migratedCounts[cleanedCount] = dirtyCount;
-                newValidLengths[cleanedCount] = writeIndex;
-                cleanedCount++;
-            }
-        }
-
-        nextIndex = endIndex;
-
-        // Resize arrays to actual cleaned count
-        assembly {
-            mstore(migratedUsers, cleanedCount)
-            mstore(migratedCounts, cleanedCount)
-            mstore(newValidLengths, cleanedCount)
-        }
     }
 
     function _at(AccountMap storage map, uint index) internal view returns (Account storage) {

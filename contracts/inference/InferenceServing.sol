@@ -107,12 +107,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AllTokensRevoked(address indexed user, address indexed provider, uint newGeneration);
     event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
     event ContractInitialized(address indexed owner, uint256 lockTime, address ledgerAddress);
-    event RefundsMigrated(
-        address indexed user,
-        address indexed provider,
-        uint256 migratedCount,
-        uint256 newValidLength
-    );
     event AccountDeleted(
         address indexed user,
         address indexed provider,
@@ -235,35 +229,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         Service storage service = $.serviceMap.getService(provider);
         $.serviceMap.revokeTEESignerAcknowledgement(provider);
         emit ProviderTEESignerAcknowledged(provider, service.teeSignerAddress, false);
-    }
-
-    /// @notice Migration function to clean up old processed refunds (one-time use after upgrade)
-    /// @dev Supports batch processing to prevent gas limit issues with large user bases
-    /// @param provider Provider address - will migrate users associated with this provider
-    /// @param startIndex Index to start migration from (0-based, use 0 to start from beginning)
-    /// @param batchSize Maximum number of accounts to process (use 0 for all remaining)
-    /// @return cleanedCount Number of accounts that had dirty data cleaned
-    /// @return nextIndex Index to continue from in next batch (equals total when complete)
-    function migrateRefunds(
-        address provider,
-        uint startIndex,
-        uint batchSize
-    ) external onlyOwner returns (uint cleanedCount, uint nextIndex) {
-        InferenceServingStorage storage $ = _getInferenceServingStorage();
-        (
-            uint cleaned,
-            uint next,
-            address[] memory users,
-            uint[] memory counts,
-            uint[] memory validLengths
-        ) = $.accountMap.migrateRefunds(provider, startIndex, batchSize);
-
-        // Emit event for each migrated account
-        for (uint i = 0; i < cleaned; i++) {
-            emit RefundsMigrated(users[i], provider, counts[i], validLengths[i]);
-        }
-
-        return (cleaned, next);
     }
 
     function revokeToken(address provider, uint8 tokenId) external {

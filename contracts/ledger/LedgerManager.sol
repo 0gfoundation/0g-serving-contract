@@ -98,11 +98,6 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     event RecommendedServiceUpdated(string serviceType, string version, address serviceAddress);
     event LedgerInfoUpdated(address indexed user, string additionalInfo);
     event FundSpent(address indexed user, address indexed service, uint256 amount);
-    event UserServiceProvidersMigrated(
-        address indexed user,
-        address indexed serviceAddress,
-        uint256 providerCount
-    );
 
     // Errors
     error LedgerNotExists(address user);
@@ -131,9 +126,6 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     error ServiceMustImplementIServing(address serviceAddress);
     error ServiceRegistryLimitReached(uint256 limit);
     error NoRecommendedService(string serviceType);
-    error NoServicesRegistered();
-    error StartUserIndexOutOfBounds(uint256 index, uint256 max);
-    error ProviderCountMismatchInMigration(uint256 newCount, uint256 expectedCount);
     error DirectDepositsDisabled();
 
     struct LedgerMap {
@@ -630,96 +622,6 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
             return false;
         }
         return $.registeredServices[serviceAddress].isRecommended;
-    }
-
-    // === Data Migration ===
-
-    /// @notice One-time migration function to move data from old mapping to new mapping
-    /// @dev Migrates userServiceProviders (serviceType-based) to userServiceProvidersByAddress (serviceAddress-based)
-    /// @dev Supports batch processing to prevent gas limit issues with large user bases
-    /// @dev Can be called by owner after contract upgrade to migrate existing data
-    /// @dev Safe to call multiple times - will only migrate data that hasn't been migrated yet
-    /// @param startUserIndex Index of user to start migration from (0-based, use 0 to start from beginning)
-    /// @param batchSize Maximum number of users to process (use 0 for all remaining users)
-    /// @return migratedCount Number of users that had data migrated
-    /// @return nextUserIndex Index to continue from in next batch (equals total users when complete)
-    function migrateUserServiceProvidersMapping(
-        uint256 startUserIndex,
-        uint256 batchSize
-    ) external onlyOwner returns (uint256 migratedCount, uint256 nextUserIndex) {
-        LedgerManagerStorage storage $ = _getLedgerManagerStorage();
-
-        // Get the service address (expecting only one in legacy environment)
-        uint256 serviceCount = $.serviceAddresses.length();
-        if (serviceCount == 0) {
-            revert NoServicesRegistered();
-        }
-        address serviceAddress = $.serviceAddresses.at(0);
-        ServiceInfo storage service = $.registeredServices[serviceAddress];
-        string memory serviceType = service.serviceType;
-
-        // Get all ledger users
-        uint256 ledgerCount = $.ledgerMap._keys.length();
-        if (ledgerCount == 0) {
-            return (0, 0);
-        }
-
-        // Validate startUserIndex
-        if (startUserIndex >= ledgerCount) {
-            revert StartUserIndexOutOfBounds(startUserIndex, ledgerCount - 1);
-        }
-
-        // Calculate end index: if batchSize is 0, process all remaining
-        uint256 endUserIndex;
-        if (batchSize == 0 || batchSize > ledgerCount - startUserIndex) {
-            endUserIndex = ledgerCount;
-        } else {
-            endUserIndex = startUserIndex + batchSize;
-        }
-
-        migratedCount = 0;
-
-        // Process batch of users
-        for (uint256 j = startUserIndex; j < endUserIndex; j++) {
-            bytes32 ledgerKey = $.ledgerMap._keys.at(j);
-            address user = $.ledgerMap._values[ledgerKey].user;
-
-            // Get old mapping data
-            EnumerableSet.AddressSet storage oldProviders = $.userServiceProviders[user][serviceType];
-
-            // Skip if no data to migrate
-            if (oldProviders.length() == 0) {
-                continue;
-            }
-
-            // Get new mapping reference
-            EnumerableSet.AddressSet storage newProviders = $.userServiceProvidersByAddress[user][serviceAddress];
-
-            // Copy providers to new mapping
-            uint256 providerCount = oldProviders.length();
-            for (uint256 k = 0; k < providerCount; k++) {
-                address provider = oldProviders.at(k);
-                // Only add if not already present (safe for multiple calls)
-                if (!newProviders.contains(provider)) {
-                    newProviders.add(provider);
-                }
-            }
-
-            // Safety check: verify all providers were migrated successfully
-            if (newProviders.length() != providerCount) {
-                revert ProviderCountMismatchInMigration(newProviders.length(), providerCount);
-            }
-
-            // Clear old mapping to save storage
-            for (uint256 k = 0; k < providerCount; k++) {
-                oldProviders.remove(oldProviders.at(0)); // Always remove first element
-            }
-
-            emit UserServiceProvidersMigrated(user, serviceAddress, providerCount);
-            migratedCount++;
-        }
-
-        nextUserIndex = endUserIndex;
     }
 
     // === Internal Helper Functions ===
