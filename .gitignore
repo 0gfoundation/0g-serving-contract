@@ -10,10 +10,6 @@ node_modules
 
 solcInputs
 
-# Dev 
-zgTestnetDev
-zgTestnetDev-*
-
 # Migrate
 zgTestnetMigrate
 data
