@@ -89,8 +89,8 @@ contract LedgerManager is Ownable, Initializable, ReentrancyGuard {
     uint public constant MAX_SERVICES = 500;
     uint public constant MAX_PROVIDERS_PER_USER_PER_SERVICE = 50; // Limit to prevent unbounded gas in _deleteAllServiceAccounts
     uint public constant MAX_ADDITIONAL_INFO_LENGTH = 4096; // 4KB limit for JSON configuration data
-    uint public constant MIN_ACCOUNT_BALANCE = 3 ether; // 3 0G minimum account balance
-    uint public constant MIN_TRANSFER_AMOUNT = 1 ether; // 1 0G minimum transfer for new service account
+    uint public constant MIN_ACCOUNT_BALANCE = 0.1 ether; // 3 0G minimum account balance
+    uint public constant MIN_TRANSFER_AMOUNT = 0.01 ether; // 1 0G minimum transfer for new service account
     bytes4 private constant SERVING_INTERFACE_ID = type(IServing).interfaceId;
 
     // Events
