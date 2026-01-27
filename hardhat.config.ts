@@ -82,6 +82,12 @@ const config: HardhatUserConfig = {
             chainId: 16602,
             gasPrice: 12000000000,
         },
+        zgTestnetDev: {
+            url: "https://evmrpc-testnet.0g.ai",
+            accounts: [ZG_TESTNET_DEV_PRIVATE_KEY],
+            chainId: 16602,
+            gasPrice: 12000000000,
+        },        
         zgTestnetMigrate: {
             url: "https://evmrpc-testnet.0g.ai",
             accounts: [ZG_TESTNET_MIGRATE_PRIVATE_KEY],
