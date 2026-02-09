@@ -100,6 +100,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     error SecretShouldBeEmpty();
     error CannotAddStakeWhenUpdating();
     error InsufficientStake(uint256 provided, uint256 required);
+    error DeliverableAlreadySettled(string id);
 
     /// @notice Initializes the contract with locktime and ledger address
     /// @param _locktime The time period for refund locks
@@ -419,6 +420,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
             revert AccountLibrary.DeliverableNotExists(verifierInput.id);
         }
         Deliverable storage deliverable = account.deliverables[verifierInput.id];
+        if (deliverable.settled) {
+            revert DeliverableAlreadySettled(verifierInput.id);
+        }
         if (keccak256(deliverable.modelRootHash) != keccak256(verifierInput.modelRootHash)) {
             revert InvalidVerifierInput("model root hash mismatch");
         }
@@ -443,6 +447,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         }
 
         account.nonce = verifierInput.nonce;
+        deliverable.settled = true;
         _settleFees(account, fee);
     }
 

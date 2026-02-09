@@ -90,6 +90,7 @@ struct Deliverable {
     bytes encryptedSecret;
     bool acknowledged;
     uint248 timestamp; // When this deliverable was added (uint248 is sufficient: 2^248 seconds >> universe age)
+    bool settled; // Whether fees have been settled for this deliverable (prevents double settlement)
 }
 
 struct AccountSummary {
@@ -672,7 +673,8 @@ library AccountLibrary {
             modelRootHash: modelRootHash,
             encryptedSecret: "",
             acknowledged: false,
-            timestamp: uint248(block.timestamp) // GAS-5: Safe conversion (block.timestamp << 2^248)
+            timestamp: uint248(block.timestamp), // GAS-5: Safe conversion (block.timestamp << 2^248)
+            settled: false
         });
 
         if (account.deliverablesCount < MAX_DELIVERABLES_PER_ACCOUNT) {
