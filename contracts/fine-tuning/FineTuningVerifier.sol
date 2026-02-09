@@ -21,7 +21,7 @@ struct VerifierInput {
 library VerifierLibrary {
     // Custom errors for gas efficiency and better debugging
     error InvalidSignature();
-    error DeliverableIdTooLong(uint256 length);
+    error DeliverableIdInvalidLength(uint256 length);
 
     // EIP-712 Domain Separator constants (following InferenceServing pattern)
     bytes32 private constant DOMAIN_TYPEHASH =
@@ -48,8 +48,10 @@ library VerifierLibrary {
         address contractAddress
     ) internal view returns (bool) {
         // HIGH-5 FIX: Validate deliverable ID length to prevent DoS
-        if (bytes(input.id).length > MAX_DELIVERABLE_ID_LENGTH) {
-            revert DeliverableIdTooLong(bytes(input.id).length);
+        // Consistent with FineTuningAccount validation (reject empty and too long)
+        uint256 idLength = bytes(input.id).length;
+        if (idLength == 0 || idLength > MAX_DELIVERABLE_ID_LENGTH) {
+            revert DeliverableIdInvalidLength(idLength);
         }
 
         // Compute EIP-712 domain separator
