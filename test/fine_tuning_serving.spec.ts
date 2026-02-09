@@ -620,6 +620,23 @@ describe("Fine tuning serving", () => {
                 expect(deliverable.id).to.equal(deliverableIds[i]);
             }
 
+            // Settle the first two deliverables before adding more
+            // This ensures they can be evicted when the array is full
+            const taskFee = 10;
+            for (let i = 0; i < 2; i++) {
+                const verifierInput: VerifierInputStruct = {
+                    taskFee,
+                    encryptedSecret: "0x1234567890abcdef1234567890abcdef12345678",
+                    modelRootHash: modelHashes[i],
+                    id: deliverableIds[i],
+                    nonce: BigInt(i + 1),
+                    user: ownerAddress,
+                    signature: "",
+                };
+                const signedInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
+                await serving.connect(provider1).settleFees(signedInput);
+            }
+
             // Add one more deliverable - should trigger circular array behavior
             const newId1 = ethers.hexlify(ethers.randomBytes(32));
             const newHash1 = ethers.hexlify(ethers.randomBytes(32));

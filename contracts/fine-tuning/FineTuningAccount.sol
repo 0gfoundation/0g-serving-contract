@@ -143,6 +143,7 @@ library AccountLibrary {
     error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
     error CannotAcknowledgeSettledDeliverable(string id);
     error BatchSizeTooLarge(uint256 size, uint256 maxSize);
+    error CannotEvictUnsettledDeliverable(string id);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -700,8 +701,16 @@ library AccountLibrary {
             // Array is full (20 deliverables), use FIFO eviction strategy
             // SAFETY: Due to serial task validation above, all older deliverables
             // must be acknowledged before we can add this new one. Therefore,
-            // the oldest deliverable is guaranteed to be acknowledged and safe to evict.
+            // the oldest deliverable is guaranteed to be acknowledged.
+            // IMPORTANT: We also check that it's settled to prevent loss of settlement rights.
             string memory oldestId = account.deliverableIds[account.deliverablesHead];
+            Deliverable storage oldest = account.deliverables[oldestId];
+
+            // Check if oldest deliverable has been settled
+            if (!oldest.settled) {
+                revert CannotEvictUnsettledDeliverable(oldestId);
+            }
+
             delete account.deliverables[oldestId]; // Remove from mapping
 
             account.deliverableIds[account.deliverablesHead] = id; // Overwrite with new ID
