@@ -73,14 +73,14 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     event BalanceUpdated(address indexed user, address indexed provider, uint amount, uint pendingRefund);
     event RefundRequested(address indexed user, address indexed provider, uint indexed index, uint timestamp);
     event ServiceUpdated(
-        address indexed user,
+        address indexed provider,
         string url,
         Quota quota,
         uint pricePerToken,
         address teeSignerAddress,
         bool occupied
     );
-    event ServiceRemoved(address indexed user);
+    event ServiceRemoved(address indexed provider);
     event AccountDeleted(address indexed user, address indexed provider, uint256 refundedAmount);
     event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
     event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
@@ -88,6 +88,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     event ProviderStakeReturned(address indexed provider, uint amount);
     event DeliverableAdded(address indexed user, address indexed provider, string deliverableId, bytes modelRootHash, uint timestamp);
     event DeliverableAcknowledged(address indexed user, address indexed provider, string deliverableId, uint timestamp);
+    event DeliverableEvicted(address indexed provider, address indexed user, string evictedDeliverableId, string newDeliverableId, uint timestamp);
     event FeesSettled(address indexed user, address indexed provider, string deliverableId, uint fee, bool acknowledged, uint nonce);
 
     // GAS-1 optimization: Custom errors for gas efficiency
@@ -383,7 +384,13 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     function addDeliverable(address user, string calldata id, bytes memory modelRootHash) external {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        $.accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
+        (bool evicted, string memory evictedId) = $.accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
+
+        // Emit eviction event if a deliverable was evicted
+        if (evicted) {
+            emit DeliverableEvicted(msg.sender, user, evictedId, id, block.timestamp);
+        }
+
         emit DeliverableAdded(user, msg.sender, id, modelRootHash, block.timestamp);
     }
 

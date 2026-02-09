@@ -631,13 +631,15 @@ library AccountLibrary {
     /// @param provider The provider address
     /// @param id The unique deliverable identifier
     /// @param modelRootHash The model root hash
+    /// @return evicted Whether a deliverable was evicted
+    /// @return evictedId The ID of the evicted deliverable (empty if no eviction)
     function addDeliverable(
         AccountMap storage map,
         address user,
         address provider,
         string calldata id,
         bytes memory modelRootHash
-    ) internal {
+    ) internal returns (bool evicted, string memory evictedId) {
         // HIGH-5 FIX: Validate deliverable ID length to prevent DoS via excessive gas consumption
         uint256 idLength = bytes(id).length;
         if (idLength == 0 || idLength > MAX_DELIVERABLE_ID_LENGTH) {
@@ -689,6 +691,8 @@ library AccountLibrary {
             // Array not full, add to next available position
             account.deliverableIds[account.deliverablesCount] = id;
             account.deliverablesCount++;
+            evicted = false;
+            evictedId = "";
         } else {
             // Array is full (20 deliverables), use FIFO eviction strategy
             // SAFETY: Due to serial task validation above, all older deliverables
@@ -699,6 +703,9 @@ library AccountLibrary {
 
             account.deliverableIds[account.deliverablesHead] = id; // Overwrite with new ID
             account.deliverablesHead = (account.deliverablesHead + 1) % MAX_DELIVERABLES_PER_ACCOUNT;
+
+            evicted = true;
+            evictedId = oldestId;
         }
 
         // Add to mapping
