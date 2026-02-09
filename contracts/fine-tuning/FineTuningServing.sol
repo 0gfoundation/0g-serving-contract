@@ -86,6 +86,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
     event ProviderStaked(address indexed provider, uint amount);
     event ProviderStakeReturned(address indexed provider, uint amount);
+    event DeliverableAdded(address indexed user, address indexed provider, string deliverableId, bytes modelRootHash, uint timestamp);
+    event DeliverableAcknowledged(address indexed user, address indexed provider, string deliverableId, uint timestamp);
+    event FeesSettled(address indexed user, address indexed provider, string deliverableId, uint fee, bool acknowledged, uint nonce);
 
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
@@ -265,6 +268,12 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function requestRefundAll(address user, address provider) external onlyLedger {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.requestRefundAll(user, provider);
+
+        // Emit RefundRequested event after requestRefundAll
+        Account storage account = $.accountMap.getAccount(user, provider);
+        if (account.validRefundsLength > 0) {
+            emit RefundRequested(user, provider, account.validRefundsLength - 1, block.timestamp);
+        }
     }
 
     function processRefund(
@@ -298,6 +307,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function acknowledgeDeliverable(address provider, string calldata id) external {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.acknowledgeDeliverable(msg.sender, provider, id);
+        emit DeliverableAcknowledged(msg.sender, provider, id, block.timestamp);
     }
 
     function acknowledgeTEESignerByOwner(address provider) external onlyOwner {
@@ -374,6 +384,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function addDeliverable(address user, string calldata id, bytes memory modelRootHash) external {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
+        emit DeliverableAdded(user, msg.sender, id, modelRootHash, block.timestamp);
     }
 
     function getDeliverable(
@@ -448,6 +459,17 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
         account.nonce = verifierInput.nonce;
         deliverable.settled = true;
+
+        // Emit FeesSettled event before _settleFees to track settlement details
+        emit FeesSettled(
+            verifierInput.user,
+            msg.sender,
+            verifierInput.id,
+            fee,
+            deliverable.acknowledged,
+            verifierInput.nonce
+        );
+
         _settleFees(account, fee);
     }
 
