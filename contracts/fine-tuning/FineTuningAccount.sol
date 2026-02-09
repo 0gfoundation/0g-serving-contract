@@ -141,6 +141,7 @@ library AccountLibrary {
     error DeliverableIdInvalidLength(uint256 length);
     error PreviousDeliverableNotAcknowledged(string id);
     error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
+    error CannotAcknowledgeSettledDeliverable(string id);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -586,8 +587,15 @@ library AccountLibrary {
             revert DeliverableNotExists(id);
         }
 
+        Deliverable storage deliverable = account.deliverables[id];
+
+        // Prevent acknowledging after settlement to maintain state consistency
+        if (deliverable.settled) {
+            revert CannotAcknowledgeSettledDeliverable(id);
+        }
+
         // Mark as acknowledged
-        account.deliverables[id].acknowledged = true;
+        deliverable.acknowledged = true;
     }
 
     /// @notice Allows user to acknowledge or revoke acknowledgement of a provider's TEE signer
