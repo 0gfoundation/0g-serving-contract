@@ -142,6 +142,7 @@ library AccountLibrary {
     error PreviousDeliverableNotAcknowledged(string id);
     error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
     error CannotAcknowledgeSettledDeliverable(string id);
+    error BatchSizeTooLarge(uint256 size, uint256 maxSize);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -310,7 +311,9 @@ library AccountLibrary {
         address[] calldata users,
         address provider
     ) internal view returns (AccountSummary[] memory accounts) {
-        require(users.length <= 500, "Batch size too large (max 500)");
+        if (users.length > 50) {
+            revert BatchSizeTooLarge(users.length, 50);
+        }
         accounts = new AccountSummary[](users.length);
 
         for (uint i = 0; i < users.length; ) {

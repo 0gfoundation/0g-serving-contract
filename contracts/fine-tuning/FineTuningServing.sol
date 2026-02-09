@@ -94,6 +94,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
     error InvalidLedgerAddress();
+    error CallerNotLedger();
     error PenaltyPercentageTooHigh(uint256 percentage);
     error LockTimeOutOfRange(uint256 lockTime);
     error LimitTooLarge(uint256 limit);
@@ -136,7 +137,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     modifier onlyLedger() {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(msg.sender == $.ledgerAddress, "Caller is not the ledger contract");
+        if (msg.sender != $.ledgerAddress) {
+            revert CallerNotLedger();
+        }
         _;
     }
 
