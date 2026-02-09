@@ -12,7 +12,7 @@ uint constant MAX_DELIVERABLE_ID_LENGTH = 256; // HIGH-5 FIX: Max length for del
 /// 1. Active refunds are stored in positions [0, validRefundsLength)
 /// 2. Inactive/reusable slots are in positions [validRefundsLength, refunds.length)
 /// 3. Array grows on-demand up to MAX_REFUNDS_PER_ACCOUNT, never shrinks
-/// 4. The 'processed' field in Refund is kept for storage compatibility but not used in logic
+/// 4. The '_deprecated_processed' field in Refund is kept for storage compatibility but not used in logic
 /// @dev Deliverables are managed using a circular array pattern (FIFO with fixed capacity)
 /// @dev Data Structure:
 ///   - deliverables[id]: Mapping storing actual deliverable data by ID
@@ -78,7 +78,7 @@ struct Refund {
     uint index;
     uint amount;
     uint createdAt;
-    bool processed;
+    bool _deprecated_processed;  // Legacy field kept for storage layout compatibility, do not use
 }
 
 /// @dev GAS-5: Struct field packing optimization
