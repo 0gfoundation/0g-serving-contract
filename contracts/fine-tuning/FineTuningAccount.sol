@@ -12,7 +12,7 @@ uint constant MAX_DELIVERABLE_ID_LENGTH = 256; // HIGH-5 FIX: Max length for del
 /// 1. Active refunds are stored in positions [0, validRefundsLength)
 /// 2. Inactive/reusable slots are in positions [validRefundsLength, refunds.length)
 /// 3. Array grows on-demand up to MAX_REFUNDS_PER_ACCOUNT, never shrinks
-/// 4. The 'processed' field in Refund is kept for storage compatibility but not used in logic
+/// 4. The '_deprecated_processed' field in Refund is kept for storage compatibility but not used in logic
 /// @dev Deliverables are managed using a circular array pattern (FIFO with fixed capacity)
 /// @dev Data Structure:
 ///   - deliverables[id]: Mapping storing actual deliverable data by ID
@@ -78,7 +78,7 @@ struct Refund {
     uint index;
     uint amount;
     uint createdAt;
-    bool processed;
+    bool _deprecated_processed;  // Legacy field kept for storage layout compatibility, do not use
 }
 
 /// @dev GAS-5: Struct field packing optimization
@@ -90,6 +90,7 @@ struct Deliverable {
     bytes encryptedSecret;
     bool acknowledged;
     uint248 timestamp; // When this deliverable was added (uint248 is sufficient: 2^248 seconds >> universe age)
+    bool settled; // Whether fees have been settled for this deliverable (prevents double settlement)
 }
 
 struct AccountSummary {
@@ -140,6 +141,9 @@ library AccountLibrary {
     error DeliverableIdInvalidLength(uint256 length);
     error PreviousDeliverableNotAcknowledged(string id);
     error CannotRevokeWithNonZeroBalance(address user, address provider, uint256 balance);
+    error CannotAcknowledgeSettledDeliverable(string id);
+    error BatchSizeTooLarge(uint256 size, uint256 maxSize);
+    error CannotEvictUnsettledDeliverable(string id);
 
     struct AccountMap {
         EnumerableSet.Bytes32Set _keys;
@@ -308,7 +312,9 @@ library AccountLibrary {
         address[] calldata users,
         address provider
     ) internal view returns (AccountSummary[] memory accounts) {
-        require(users.length <= 500, "Batch size too large (max 500)");
+        if (users.length > 50) {
+            revert BatchSizeTooLarge(users.length, 50);
+        }
         accounts = new AccountSummary[](users.length);
 
         for (uint i = 0; i < users.length; ) {
@@ -585,8 +591,15 @@ library AccountLibrary {
             revert DeliverableNotExists(id);
         }
 
+        Deliverable storage deliverable = account.deliverables[id];
+
+        // Prevent acknowledging after settlement to maintain state consistency
+        if (deliverable.settled) {
+            revert CannotAcknowledgeSettledDeliverable(id);
+        }
+
         // Mark as acknowledged
-        account.deliverables[id].acknowledged = true;
+        deliverable.acknowledged = true;
     }
 
     /// @notice Allows user to acknowledge or revoke acknowledgement of a provider's TEE signer
@@ -622,13 +635,15 @@ library AccountLibrary {
     /// @param provider The provider address
     /// @param id The unique deliverable identifier
     /// @param modelRootHash The model root hash
+    /// @return evicted Whether a deliverable was evicted
+    /// @return evictedId The ID of the evicted deliverable (empty if no eviction)
     function addDeliverable(
         AccountMap storage map,
         address user,
         address provider,
         string calldata id,
         bytes memory modelRootHash
-    ) internal {
+    ) internal returns (bool evicted, string memory evictedId) {
         // HIGH-5 FIX: Validate deliverable ID length to prevent DoS via excessive gas consumption
         uint256 idLength = bytes(id).length;
         if (idLength == 0 || idLength > MAX_DELIVERABLE_ID_LENGTH) {
@@ -672,23 +687,37 @@ library AccountLibrary {
             modelRootHash: modelRootHash,
             encryptedSecret: "",
             acknowledged: false,
-            timestamp: uint248(block.timestamp) // GAS-5: Safe conversion (block.timestamp << 2^248)
+            timestamp: uint248(block.timestamp), // GAS-5: Safe conversion (block.timestamp << 2^248)
+            settled: false
         });
 
         if (account.deliverablesCount < MAX_DELIVERABLES_PER_ACCOUNT) {
             // Array not full, add to next available position
             account.deliverableIds[account.deliverablesCount] = id;
             account.deliverablesCount++;
+            evicted = false;
+            evictedId = "";
         } else {
             // Array is full (20 deliverables), use FIFO eviction strategy
             // SAFETY: Due to serial task validation above, all older deliverables
             // must be acknowledged before we can add this new one. Therefore,
-            // the oldest deliverable is guaranteed to be acknowledged and safe to evict.
+            // the oldest deliverable is guaranteed to be acknowledged.
+            // IMPORTANT: We also check that it's settled to prevent loss of settlement rights.
             string memory oldestId = account.deliverableIds[account.deliverablesHead];
+            Deliverable storage oldest = account.deliverables[oldestId];
+
+            // Check if oldest deliverable has been settled
+            if (!oldest.settled) {
+                revert CannotEvictUnsettledDeliverable(oldestId);
+            }
+
             delete account.deliverables[oldestId]; // Remove from mapping
 
             account.deliverableIds[account.deliverablesHead] = id; // Overwrite with new ID
             account.deliverablesHead = (account.deliverablesHead + 1) % MAX_DELIVERABLES_PER_ACCOUNT;
+
+            evicted = true;
+            evictedId = oldestId;
         }
 
         // Add to mapping

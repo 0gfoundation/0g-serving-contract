@@ -73,23 +73,28 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     event BalanceUpdated(address indexed user, address indexed provider, uint amount, uint pendingRefund);
     event RefundRequested(address indexed user, address indexed provider, uint indexed index, uint timestamp);
     event ServiceUpdated(
-        address indexed user,
+        address indexed provider,
         string url,
         Quota quota,
         uint pricePerToken,
         address teeSignerAddress,
         bool occupied
     );
-    event ServiceRemoved(address indexed user);
+    event ServiceRemoved(address indexed provider);
     event AccountDeleted(address indexed user, address indexed provider, uint256 refundedAmount);
     event LockTimeUpdated(uint256 oldLockTime, uint256 newLockTime);
     event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
     event ProviderStaked(address indexed provider, uint amount);
     event ProviderStakeReturned(address indexed provider, uint amount);
+    event DeliverableAdded(address indexed user, address indexed provider, string deliverableId, bytes modelRootHash, uint timestamp);
+    event DeliverableAcknowledged(address indexed user, address indexed provider, string deliverableId, uint timestamp);
+    event DeliverableEvicted(address indexed provider, address indexed user, string evictedDeliverableId, string newDeliverableId, uint timestamp);
+    event FeesSettled(address indexed user, address indexed provider, string deliverableId, uint fee, bool acknowledged, uint nonce);
 
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
     error InvalidLedgerAddress();
+    error CallerNotLedger();
     error PenaltyPercentageTooHigh(uint256 percentage);
     error LockTimeOutOfRange(uint256 lockTime);
     error LimitTooLarge(uint256 limit);
@@ -100,6 +105,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     error SecretShouldBeEmpty();
     error CannotAddStakeWhenUpdating();
     error InsufficientStake(uint256 provided, uint256 required);
+    error DeliverableAlreadySettled(string id);
 
     /// @notice Initializes the contract with locktime and ledger address
     /// @param _locktime The time period for refund locks
@@ -131,7 +137,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     modifier onlyLedger() {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        require(msg.sender == $.ledgerAddress, "Caller is not the ledger contract");
+        if (msg.sender != $.ledgerAddress) {
+            revert CallerNotLedger();
+        }
         _;
     }
 
@@ -264,6 +272,12 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function requestRefundAll(address user, address provider) external onlyLedger {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.requestRefundAll(user, provider);
+
+        // Emit RefundRequested event after requestRefundAll
+        Account storage account = $.accountMap.getAccount(user, provider);
+        if (account.validRefundsLength > 0) {
+            emit RefundRequested(user, provider, account.validRefundsLength - 1, block.timestamp);
+        }
     }
 
     function processRefund(
@@ -297,6 +311,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     function acknowledgeDeliverable(address provider, string calldata id) external {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
         $.accountMap.acknowledgeDeliverable(msg.sender, provider, id);
+        emit DeliverableAcknowledged(msg.sender, provider, id, block.timestamp);
     }
 
     function acknowledgeTEESignerByOwner(address provider) external onlyOwner {
@@ -372,7 +387,14 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
     function addDeliverable(address user, string calldata id, bytes memory modelRootHash) external {
         FineTuningServingStorage storage $ = _getFineTuningServingStorage();
-        $.accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
+        (bool evicted, string memory evictedId) = $.accountMap.addDeliverable(user, msg.sender, id, modelRootHash);
+
+        // Emit eviction event if a deliverable was evicted
+        if (evicted) {
+            emit DeliverableEvicted(msg.sender, user, evictedId, id, block.timestamp);
+        }
+
+        emit DeliverableAdded(user, msg.sender, id, modelRootHash, block.timestamp);
     }
 
     function getDeliverable(
@@ -419,6 +441,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
             revert AccountLibrary.DeliverableNotExists(verifierInput.id);
         }
         Deliverable storage deliverable = account.deliverables[verifierInput.id];
+        if (deliverable.settled) {
+            revert DeliverableAlreadySettled(verifierInput.id);
+        }
         if (keccak256(deliverable.modelRootHash) != keccak256(verifierInput.modelRootHash)) {
             revert InvalidVerifierInput("model root hash mismatch");
         }
@@ -443,6 +468,18 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         }
 
         account.nonce = verifierInput.nonce;
+        deliverable.settled = true;
+
+        // Emit FeesSettled event before _settleFees to track settlement details
+        emit FeesSettled(
+            verifierInput.user,
+            msg.sender,
+            verifierInput.id,
+            fee,
+            deliverable.acknowledged,
+            verifierInput.nonce
+        );
+
         _settleFees(account, fee);
     }
 
