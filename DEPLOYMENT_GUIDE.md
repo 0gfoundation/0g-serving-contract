@@ -286,6 +286,8 @@ git checkout main
 
 ## Scenario 4: Upgrade Specific Version
 
+### Upgrade inference v1.0
+
 ```bash
 # Switch to the release branch for the specific version
 git checkout release/inference-v1.0
@@ -320,6 +322,46 @@ EOF
 git add deployments/ .openzeppelin/ VERSION.json
 git commit -m "Upgrade inference v1.0 - patch 1"
 git push origin release/inference-v1.0
+
+git checkout main
+```
+
+### Upgrade fine-tuning v1.0
+
+```bash
+# Switch to the release branch for the specific version
+git checkout release/fine-tuning-v1.0
+
+# Modify contract code
+
+# Validate upgrade compatibility
+npx hardhat upgrade:validate --old FineTuningServing_v1.0 --new FineTuningServing --network zgTestnetDev
+
+# Execute upgrade
+npx hardhat upgrade --name FineTuningServing_v1.0 --artifact FineTuningServing --execute true --network zgTestnetDev
+
+IMPL=$(cat deployments/zgTestnetDev/FineTuningServing_v1.0Impl.json | jq -r '.address')
+BEACON=$(cat deployments/zgTestnetDev/FineTuningServing_v1.0Beacon.json | jq -r '.address')
+PROXY=$(cat deployments/zgTestnetDev/FineTuningServing_v1.0.json | jq -r '.address')
+IMPL_ADDRESS=$IMPL BEACON_ADDRESS=$BEACON PROXY_ADDRESS=$PROXY npx hardhat deploy --tags verify-contracts --network zgTestnetDev
+
+# Re-import upgraded contracts
+npx hardhat upgrade:forceImportAll --network zgTestnetDev
+
+# Update version info (increment patch version)
+cat > VERSION.json << EOF
+{
+  "service": "fine-tuning",
+  "version": "v1.0",
+  "compatibleClientSDKs": ["v1.0.0", "v1.0.1"],
+  "compatibleServingImages": ["0g-fine-tuning:v1.0.0", "0g-fine-tuning:v1.0.1"]
+}
+EOF
+
+# Commit upgrade info to release branch
+git add deployments/ .openzeppelin/ VERSION.json
+git commit -m "Upgrade fine-tuning v1.0 - patch 1"
+git push origin release/fine-tuning-v1.0
 
 git checkout main
 ```
