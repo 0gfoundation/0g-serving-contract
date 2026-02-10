@@ -86,10 +86,30 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     event ProviderTEESignerAcknowledged(address indexed provider, address indexed teeSignerAddress, bool acknowledged);
     event ProviderStaked(address indexed provider, uint amount);
     event ProviderStakeReturned(address indexed provider, uint amount);
-    event DeliverableAdded(address indexed user, address indexed provider, string deliverableId, bytes modelRootHash, uint timestamp);
+    event DeliverableAdded(
+        address indexed user,
+        address indexed provider,
+        string deliverableId,
+        bytes modelRootHash,
+        uint timestamp
+    );
     event DeliverableAcknowledged(address indexed user, address indexed provider, string deliverableId, uint timestamp);
-    event DeliverableEvicted(address indexed provider, address indexed user, string evictedDeliverableId, string newDeliverableId, uint timestamp);
-    event FeesSettled(address indexed user, address indexed provider, string deliverableId, uint fee, bool acknowledged, uint nonce);
+    event DeliverableEvicted(
+        address indexed provider,
+        address indexed user,
+        string evictedDeliverableId,
+        string newDeliverableId,
+        uint timestamp
+    );
+    event FeesSettled(
+        address indexed user,
+        address indexed provider,
+        string deliverableId,
+        uint fee,
+        bool acknowledged,
+        uint nonce
+    );
+    event DeliverableAbandoned(address indexed user, address indexed provider, string deliverableId, uint timestamp);
 
     // GAS-1 optimization: Custom errors for gas efficiency
     error InvalidVerifierInput(string reason);
@@ -106,6 +126,7 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
     error CannotAddStakeWhenUpdating();
     error InsufficientStake(uint256 provided, uint256 required);
     error DeliverableAlreadySettled(string id);
+    error CannotAbandonSettledDeliverable(string id);
 
     /// @notice Initializes the contract with locktime and ledger address
     /// @param _locktime The time period for refund locks
@@ -397,6 +418,39 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
         emit DeliverableAdded(user, msg.sender, id, modelRootHash, block.timestamp);
     }
 
+    /// @notice Allows provider to abandon a deliverable that failed or is no longer needed
+    /// @dev This marks the deliverable as both acknowledged and settled with zero fee
+    /// @dev Enables provider to unblock serial task execution without user interaction
+    /// @dev Provider forfeits all payment rights for the abandoned deliverable
+    /// @param user The user address
+    /// @param id The deliverable ID to abandon
+    function abandonDeliverable(address user, string calldata id) external {
+        FineTuningServingStorage storage $ = _getFineTuningServingStorage();
+        Account storage account = $.accountMap.getAccount(user, msg.sender);
+
+        // Check if deliverable exists
+        if (bytes(account.deliverables[id].id).length == 0) {
+            revert AccountLibrary.DeliverableNotExists(id);
+        }
+
+        Deliverable storage deliverable = account.deliverables[id];
+
+        // Can only abandon unsettled deliverables
+        if (deliverable.settled) {
+            revert CannotAbandonSettledDeliverable(id);
+        }
+
+        // Mark as acknowledged (allows adding next deliverable due to serial execution check)
+        deliverable.acknowledged = true;
+
+        // Mark as settled to prevent future settlement attempts
+        deliverable.settled = true;
+
+        // No fee transfer occurs - provider forfeits payment
+
+        emit DeliverableAbandoned(user, msg.sender, id, block.timestamp);
+    }
+
     function getDeliverable(
         address user,
         address provider,
@@ -500,7 +554,9 @@ contract FineTuningServing is Ownable, Initializable, ReentrancyGuard, IServing,
 
             // Single pass: process refunds from end to start (LIFO - most recent first)
             for (uint i = validLength; i > 0 && remainingToDeduct > 0; ) {
-                unchecked { --i; }
+                unchecked {
+                    --i;
+                }
                 Refund storage refund = account.refunds[i];
 
                 if (refund.amount <= remainingToDeduct) {
