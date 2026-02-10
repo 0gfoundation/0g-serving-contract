@@ -2,6 +2,7 @@
 pragma solidity 0.8.22;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {AccountLibrary} from "./FineTuningAccount.sol";
 
 /// @title VerifierInput
 /// @notice Structure containing all data required for signature verification
@@ -21,7 +22,6 @@ struct VerifierInput {
 library VerifierLibrary {
     // Custom errors for gas efficiency and better debugging
     error InvalidSignature();
-    error DeliverableIdInvalidLength(uint256 length);
 
     // EIP-712 Domain Separator constants (following InferenceServing pattern)
     bytes32 private constant DOMAIN_TYPEHASH =
@@ -51,7 +51,7 @@ library VerifierLibrary {
         // Consistent with FineTuningAccount validation (reject empty and too long)
         uint256 idLength = bytes(input.id).length;
         if (idLength == 0 || idLength > MAX_DELIVERABLE_ID_LENGTH) {
-            revert DeliverableIdInvalidLength(idLength);
+            revert AccountLibrary.DeliverableIdInvalidLength(idLength);
         }
 
         // Compute EIP-712 domain separator
