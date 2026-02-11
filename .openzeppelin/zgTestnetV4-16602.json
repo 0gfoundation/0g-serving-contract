@@ -2,7 +2,7 @@
   "manifestVersion": "3.2",
   "proxies": [],
   "impls": {
-    "abee17e9ff3345adc0961116a7207dc6b49c467eceec159e91fc886bff12c0e9": {
+    "21be48a221f9cc53331147418eedd0391add18b3d35614e16590ad0dd7b027f1": {
       "address": "0x71BC400e0545cD0f5C137563b49dF64e75bF19d0",
       "layout": {
         "solcVersion": "0.8.22",
@@ -57,8 +57,8 @@
         "namespaces": {}
       }
     },
-    "fc0126c923160ed7d5b3fe9a4af6594374861204f2a6cbe39a751364ab6cae9d": {
-      "address": "0xCe4348aCc35f2E25902410fAB043B846ab68B1c5",
+    "eece4f38b3864a6a9d561d7e3d02c8645b6a997622bf300146b744619b2e1f9a": {
+      "address": "0x0Fc4D19E65E26ab84f5119cB0425b656234c527b",
       "layout": {
         "solcVersion": "0.8.22",
         "storage": [
