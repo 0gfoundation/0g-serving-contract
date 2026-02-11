@@ -9,7 +9,6 @@ dotenv.config();
 
 const ZG_TESTNET_V4_PRIVATE_KEY = process.env.ZG_TESTNET_V4_PRIVATE_KEY || "";
 const ZG_TESTNET_DEV_PRIVATE_KEY = process.env.ZG_TESTNET_DEV_PRIVATE_KEY || "";
-const ZG_TESTNET_MIGRATE_PRIVATE_KEY = process.env.ZG_TESTNET_MIGRATE_PRIVATE_KEY || "";
 const ZG_MAINNET_PRIVATE_KEY = process.env.ZG_MAINNET_PRIVATE_KEY || "";
 
 import "./src/tasks/upgrade";
@@ -88,12 +87,6 @@ const config: HardhatUserConfig = {
             chainId: 16602,
             gasPrice: 12000000000,
         },        
-        zgTestnetMigrate: {
-            url: "https://evmrpc-testnet.0g.ai",
-            accounts: [ZG_TESTNET_MIGRATE_PRIVATE_KEY],
-            chainId: 16602,
-            gasPrice: 12000000000,
-        },
         zgMainnet: {
             url: "https://evmrpc.0g.ai",
             accounts: [ZG_MAINNET_PRIVATE_KEY],
