@@ -110,7 +110,11 @@
           }
         },
         "namespaces": {}
-      }
+      },
+      "allAddresses": [
+        "0x0Fc4D19E65E26ab84f5119cB0425b656234c527b",
+        "0xe7CDaB774578128694E4d247f3454Ef2B1B1a78C"
+      ]
     },
     "1b64b534804a347a55c9aad5e18b69747e5cfc2bbfe505301129fa6b648322a7": {
       "address": "0x84EaB76dCfA142a1CC0DcfB46110d9A41a250FE1",
