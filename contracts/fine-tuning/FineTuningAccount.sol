@@ -660,10 +660,11 @@ library AccountLibrary {
             revert DeliverableAlreadyExists(id);
         }
 
-        // MED-4 FIX: Enforce serial task execution
-        // BUSINESS RULE: Tasks must be completed sequentially
-        // Only allow new deliverable if previous one is acknowledged or no deliverables exist
-        // This prevents adding new tasks while previous ones are still pending
+        // Enforce serial task execution: previous deliverable must be in a terminal state.
+        // Terminal = acknowledged (normal flow) OR settled (penalty-settle path completed
+        // without ack). Without the settled branch, a settle-before-ack race permanently
+        // deadlocks the (user, provider) pair: acknowledgeDeliverable and abandonDeliverable
+        // both revert once settled=true, and this gate would refuse any further deliverable.
         if (account.deliverablesCount > 0) {
             // Get the most recent deliverable ID
             uint latestIndex;
@@ -676,7 +677,8 @@ library AccountLibrary {
             }
 
             string memory latestId = account.deliverableIds[latestIndex];
-            if (!account.deliverables[latestId].acknowledged) {
+            Deliverable storage latest = account.deliverables[latestId];
+            if (!latest.acknowledged && !latest.settled) {
                 revert PreviousDeliverableNotAcknowledged(latestId);
             }
         }
@@ -698,11 +700,11 @@ library AccountLibrary {
             evicted = false;
             evictedId = "";
         } else {
-            // Array is full (20 deliverables), use FIFO eviction strategy
-            // SAFETY: Due to serial task validation above, all older deliverables
-            // must be acknowledged before we can add this new one. Therefore,
-            // the oldest deliverable is guaranteed to be acknowledged.
-            // IMPORTANT: We also check that it's settled to prevent loss of settlement rights.
+            // Array is full (20 deliverables), use FIFO eviction strategy.
+            // SAFETY: the serial-task gate above ensures every older deliverable is in a
+            // terminal state (acknowledged or settled). The explicit !oldest.settled check
+            // below additionally guards against losing settlement rights for an acknowledged
+            // but un-settled deliverable.
             string memory oldestId = account.deliverableIds[account.deliverablesHead];
             Deliverable storage oldest = account.deliverables[oldestId];
 

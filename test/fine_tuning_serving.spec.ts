@@ -568,6 +568,78 @@ describe("Fine tuning serving", () => {
         });
     });
 
+    // Regression: a deliverable left in (settled=true, acknowledged=false) by the
+    // penalty-settle path used to permanently deadlock the (user, provider) pair.
+    // Both acknowledgeDeliverable and abandonDeliverable refuse to transition out
+    // of that state, and addDeliverable's serial-execution gate previously demanded
+    // acknowledged=true. Treating settled as a terminal state in addDeliverable
+    // restores progress without changing the economics of the penalty path.
+    describe("Penalty-settle recovery", () => {
+        const modelRootHash = "0x1234567890abcdef1234567890abcdef12345678";
+        const taskFee = 10;
+        let firstDeliverableId: string;
+
+        beforeEach(async () => {
+            await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
+
+            firstDeliverableId = ethers.hexlify(ethers.randomBytes(32));
+            await serving.connect(provider1).addDeliverable(ownerAddress, firstDeliverableId, modelRootHash);
+
+            // Provider settles without prior ack -> penalty path, deliverable left
+            // in settled=true / acknowledged=false.
+            let verifierInput: VerifierInputStruct = {
+                taskFee,
+                encryptedSecret: "0x",
+                modelRootHash,
+                id: firstDeliverableId,
+                nonce: BigInt(1),
+                user: ownerAddress,
+                signature: "",
+            };
+            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
+            await serving.connect(provider1).settleFees(verifierInput);
+
+            const stuck = await serving.getDeliverable(ownerAddress, provider1Address, firstDeliverableId);
+            expect(stuck.settled).to.equal(true);
+            expect(stuck.acknowledged).to.equal(false);
+        });
+
+        it("acknowledgeDeliverable still reverts on a settled deliverable", async () => {
+            await expect(
+                serving.acknowledgeDeliverable(provider1Address, firstDeliverableId)
+            ).to.be.revertedWithCustomError(serving, "CannotAcknowledgeSettledDeliverable");
+        });
+
+        it("abandonDeliverable still reverts on a settled deliverable", async () => {
+            await expect(
+                serving.connect(provider1).abandonDeliverable(ownerAddress, firstDeliverableId)
+            ).to.be.revertedWithCustomError(serving, "CannotAbandonSettledDeliverable");
+        });
+
+        it("addDeliverable accepts settled-without-ack as a terminal state and a full lifecycle then succeeds", async () => {
+            const nextId = ethers.hexlify(ethers.randomBytes(32));
+            const nextHash = ethers.hexlify(ethers.randomBytes(32));
+
+            await expect(
+                serving.connect(provider1).addDeliverable(ownerAddress, nextId, nextHash)
+            ).to.emit(serving, "DeliverableAdded");
+
+            await serving.acknowledgeDeliverable(provider1Address, nextId);
+
+            let verifierInput: VerifierInputStruct = {
+                taskFee,
+                encryptedSecret: "0x1234567890abcdef1234567890abcdef12345678",
+                modelRootHash: nextHash,
+                id: nextId,
+                nonce: BigInt(2),
+                user: ownerAddress,
+                signature: "",
+            };
+            verifierInput = await backfillVerifierInput(providerPrivateKey, verifierInput, serving);
+            await expect(serving.connect(provider1).settleFees(verifierInput)).to.emit(serving, "BalanceUpdated");
+        });
+    });
+
     describe("Deliverable Limits", () => {
         // Constants from AccountLibrary contract
         const MAX_DELIVERABLES_PER_ACCOUNT = 20;
