@@ -95,7 +95,7 @@ Break down ProofInputs into segments according to SegmentSize, where each segmen
 ## Transfer
 
 1. Each account has two funds pools: the "non-refunded funds pool" and the "refunded funds pool."
-2. The "refunded funds pool" contains funds that users have requested to refund but the lock time (lock time) has not been reached, so it has not yet been returned to the users.
+2. The "refunded funds pool" contains funds that users have requested to refund but the lock-time (lock-time) has not been reached, so it has not yet been returned to the users.
 3. The "refunded funds pool" consists of individual refunds. Each refund has its amount and application time.
 4. When transferring, the system first deducts from the "non-refunded funds pool" and then proceeds in reverse chronological order to deduct from each refund in the "refunded funds pool" as needed.
 
