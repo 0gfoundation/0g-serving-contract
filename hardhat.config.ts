@@ -73,6 +73,18 @@ const config: HardhatUserConfig = {
                     privateKey: "7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
                     balance: "1000000000000000000000",
                 },
+                {
+                    privateKey: "47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
+                    balance: "1000000000000000000000",
+                },
+                {
+                    privateKey: "92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e",
+                    balance: "1000000000000000000000",
+                },
+                {
+                    privateKey: "4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
+                    balance: "1000000000000000000000",
+                },
             ],
         },
         zgTestnetV4: {
