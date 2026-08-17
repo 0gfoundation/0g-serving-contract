@@ -532,6 +532,29 @@ describe("Assay Payout", () => {
         });
     });
 
+    describe("Cross-language parity (testplan §7)", () => {
+        it("a voucher signed by the Python assay (eth_account) recovers to the same signer", () => {
+            // Vector produced by pipeline/tests/test_payout.py::test_parity_vector_stable —
+            // regenerate there if the voucher encoding ever changes.
+            const pySig =
+                "0x39efd09875b7dac3d2f8d2223e25f55d92a89c6690de3191e21c0b3f7996bcbd438060288743115ff72f330b49234791a8b75299bfad7cb493491ea24a4e7ceb1c";
+            const pySigner = new ethers.Wallet("0x" + "11".repeat(32));
+            const pyDomain = {
+                name: "0G Inference Serving",
+                version: "1",
+                chainId: 31337,
+                verifyingContract: "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+            };
+            const recovered = ethers.verifyTypedData(
+                pyDomain,
+                voucherTypes,
+                { node: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", cumulative: 12345n, epoch: 7n },
+                pySig
+            );
+            expect(recovered).to.equal(pySigner.address);
+        });
+    });
+
     describe("Arithmetic / boundary (5.10)", () => {
         beforeEach(async () => {
             await settleToPool(1000n);
