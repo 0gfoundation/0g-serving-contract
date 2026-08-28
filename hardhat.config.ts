@@ -10,6 +10,11 @@ dotenv.config();
 const ZG_TESTNET_V4_PRIVATE_KEY = process.env.ZG_TESTNET_V4_PRIVATE_KEY || "";
 const ZG_TESTNET_DEV_PRIVATE_KEY = process.env.ZG_TESTNET_DEV_PRIVATE_KEY || "";
 const ZG_MAINNET_PRIVATE_KEY = process.env.ZG_MAINNET_PRIVATE_KEY || "";
+const ZG_TESTNET_ASSAY_PRIVATE_KEY = process.env.ZG_TESTNET_ASSAY_PRIVATE_KEY || "";
+
+// Only pass keys that are actually set: hardhat rejects empty strings in
+// `accounts` at config-load time, which breaks every network at once.
+const accountsOf = (key: string) => (key ? [key] : []);
 
 import "./src/tasks/upgrade";
 
@@ -89,19 +94,25 @@ const config: HardhatUserConfig = {
         },
         zgTestnetV4: {
             url: "https://evmrpc-testnet.0g.ai",
-            accounts: [ZG_TESTNET_V4_PRIVATE_KEY],
+            accounts: accountsOf(ZG_TESTNET_V4_PRIVATE_KEY),
             chainId: 16602,
             gasPrice: 12000000000,
         },
         zgTestnetDev: {
             url: "https://evmrpc-testnet.0g.ai",
-            accounts: [ZG_TESTNET_DEV_PRIVATE_KEY],
+            accounts: accountsOf(ZG_TESTNET_DEV_PRIVATE_KEY),
             chainId: 16602,
             gasPrice: 12000000000,
         },        
+        zgTestnetAssay: {
+            url: "https://evmrpc-testnet.0g.ai",
+            accounts: accountsOf(ZG_TESTNET_ASSAY_PRIVATE_KEY),
+            chainId: 16602,
+            gasPrice: 12000000000,
+        },
         zgMainnet: {
             url: "https://evmrpc.0g.ai",
-            accounts: [ZG_MAINNET_PRIVATE_KEY],
+            accounts: accountsOf(ZG_MAINNET_PRIVATE_KEY),
             chainId: 16661,
             gasPrice: 12000000000,
         },

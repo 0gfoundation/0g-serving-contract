@@ -61,7 +61,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     uint public constant MAX_LOCKTIME = 7 days;
 
     // Service provider stake requirement
-    uint public constant MIN_PROVIDER_STAKE = 100 ether; // 100 0G minimum stake
+    // zgTestnetAssay deploy: lowered from the 100 ether mainline value so the
+    // faucet-funded payout E2E can register a provider; never merge upstream.
+    uint public constant MIN_PROVIDER_STAKE = 0.1 ether;
 
     // EIP-712 Domain Separator (manual implementation for upgradeable contracts)
     bytes32 private constant DOMAIN_TYPEHASH = keccak256(
