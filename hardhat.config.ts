@@ -119,12 +119,21 @@ const config: HardhatUserConfig = {
     },
     etherscan: {
         apiKey: {
+            zgTestnetAssay: "00",
             zgTestnetV4: "00",
             zgTestnetDev: "00",
             zgTestnetMigrate: "00",
             zgMainnet: "00",
         },
         customChains: [
+            {
+                network: "zgTestnetAssay",
+                chainId: 16602,
+                urls: {
+                    apiURL: "https://chainscan-galileo.0g.ai/open/api",
+                    browserURL: "https://chainscan-galileo.0g.ai",
+                },
+            },
             {
                 network: "zgTestnetV4",
                 chainId: 16602,
