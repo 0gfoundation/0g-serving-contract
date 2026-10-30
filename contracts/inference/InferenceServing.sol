@@ -42,14 +42,21 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         ServiceLibrary.ServiceMap serviceMap;
         mapping(address => uint) providerStake; // Service provider stake amounts
         // --- SPML assay payout (appended fields; never reorder) ---
-        mapping(address => address) assaySigner; // provider => voucher signer (assay verifier key)
-        mapping(address => address) prevAssaySigner; // provider => rotated-out signer, valid until deadline
-        mapping(address => uint) prevAssaySignerDeadline; // provider => grace deadline for old signer
-        mapping(address => uint) assayPool; // provider => claimable pool balance
-        mapping(address => uint) assayPoolDeposited; // provider => cumulative amount ever pooled
-        mapping(address => uint) assayTotalPaid; // provider => cumulative amount ever claimed
+        mapping(address => AssayProvider) assay; // provider => pool + signer state
         mapping(address => mapping(address => uint)) assayWithdrawn; // provider => node => cumulative withdrawn
-        uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of poolDeposited
+        uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
+    }
+
+    /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
+    ///      slot, prevSigner has one, then pool / deposited / verifierPaid. The amount ever
+    ///      claimed is not stored: it is always deposited - pool.
+    struct AssayProvider {
+        address signer; // voucher signer (assay verifier key); non-zero = assay mode
+        uint64 prevSignerDeadline; // grace deadline for prevSigner (0 = none)
+        address prevSigner; // rotated-out signer, valid until prevSignerDeadline
+        uint pool; // claimable balance
+        uint deposited; // cumulative amount ever pooled
+        uint verifierPaid; // cumulative amount claimed by the verifier as its cut, across signer rotations
     }
 
     // keccak256(abi.encode(uint256(keccak256("0g.serving.inference.v1.0")) - 1)) & ~bytes32(uint256(0xff))
@@ -61,9 +68,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     uint public constant MAX_LOCKTIME = 7 days;
 
     // Service provider stake requirement
-    // zgTestnetAssay deploy: lowered from the 100 ether mainline value so the
-    // faucet-funded payout E2E can register a provider; never merge upstream.
-    uint public constant MIN_PROVIDER_STAKE = 0.1 ether;
+    uint public constant MIN_PROVIDER_STAKE = 100 ether; // 100 0G minimum stake
 
     // EIP-712 Domain Separator (manual implementation for upgradeable contracts)
     bytes32 private constant DOMAIN_TYPEHASH = keccak256(
@@ -75,7 +80,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     );
 
     bytes32 private constant PAYOUT_VOUCHER_TYPEHASH =
-        keccak256("PayoutVoucher(address node,uint256 cumulative,uint64 epoch)");
+        keccak256("PayoutVoucher(address provider,address node,uint256 cumulative,uint64 epoch)");
 
     string private constant DOMAIN_NAME = "0G Inference Serving";
     string private constant DOMAIN_VERSION = "1";
@@ -611,11 +616,11 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // the provider wallet never receives them directly (design: the
         // contract is the only place funds move).
         if (totalTransferAmount > 0) {
-            InferenceServingStorage storage $ = _getInferenceServingStorage();
-            if ($.assaySigner[msg.sender] != address(0)) {
-                $.assayPool[msg.sender] += totalTransferAmount;
-                $.assayPoolDeposited[msg.sender] += totalTransferAmount;
-                emit AssayPoolFunded(msg.sender, totalTransferAmount, $.assayPool[msg.sender]);
+            AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+            if (a.signer != address(0)) {
+                a.pool += totalTransferAmount;
+                a.deposited += totalTransferAmount;
+                emit AssayPoolFunded(msg.sender, totalTransferAmount, a.pool);
             } else {
                 (bool success, ) = payable(msg.sender).call{value: totalTransferAmount}("");
                 if (!success) {
@@ -641,18 +646,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (graceWindow > MAX_SIGNER_GRACE) {
             revert GraceWindowTooLong(graceWindow, MAX_SIGNER_GRACE);
         }
-        InferenceServingStorage storage $ = _getInferenceServingStorage();
-        address old = $.assaySigner[msg.sender];
+        AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+        address old = a.signer;
         uint deadline = 0;
         if (old != address(0) && old != signer && graceWindow > 0) {
-            deadline = block.timestamp + graceWindow;
-            $.prevAssaySigner[msg.sender] = old;
-            $.prevAssaySignerDeadline[msg.sender] = deadline;
+            deadline = block.timestamp + graceWindow; // graceWindow <= 7 days: fits uint64
+            a.prevSigner = old;
+            a.prevSignerDeadline = uint64(deadline);
         } else {
-            $.prevAssaySigner[msg.sender] = address(0);
-            $.prevAssaySignerDeadline[msg.sender] = 0;
+            a.prevSigner = address(0);
+            a.prevSignerDeadline = 0;
         }
-        $.assaySigner[msg.sender] = signer;
+        a.signer = signer;
         emit AssaySignerUpdated(msg.sender, old, signer, deadline);
     }
 
@@ -670,7 +675,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     /// @notice Redeem a cumulative PayoutVoucher signed by the provider's assay signer.
     ///         Anyone may submit; funds always go to the voucher's node address.
     ///         Replays are inert: cumulative must strictly exceed what the node has
-    ///         already withdrawn, and only the delta is paid.
+    ///         already withdrawn, and only the delta is paid. The voucher binds the
+    ///         provider, so two providers sharing one signer cannot pay each other's
+    ///         vouchers out of their own pool.
     function claim(
         address provider,
         address node,
@@ -682,12 +689,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert InvalidAddress(node);
         }
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        address signer = $.assaySigner[provider];
+        AssayProvider storage a = $.assay[provider];
+        address signer = a.signer;
         if (signer == address(0)) {
             revert AssaySignerNotSet(provider);
         }
 
-        bytes32 structHash = keccak256(abi.encode(PAYOUT_VOUCHER_TYPEHASH, node, cumulative, epoch));
+        bytes32 structHash = keccak256(abi.encode(PAYOUT_VOUCHER_TYPEHASH, provider, node, cumulative, epoch));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (address recovered, ECDSA.RecoverError recoverError) = ECDSA.tryRecover(digest, signature);
         if (recoverError != ECDSA.RecoverError.NoError) {
@@ -696,8 +704,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (recovered != signer) {
             // Rotation grace: in-flight vouchers from the previous signer stay
             // claimable until the deadline so rotation cannot strand funds (A2).
-            address prev = $.prevAssaySigner[provider];
-            if (prev == address(0) || recovered != prev || block.timestamp > $.prevAssaySignerDeadline[provider]) {
+            address prev = a.prevSigner;
+            if (prev == address(0) || recovered != prev || block.timestamp > a.prevSignerDeadline) {
                 revert InvalidVoucherSignature();
             }
         }
@@ -707,24 +715,27 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert NothingToClaim(cumulative, withdrawnSoFar);
         }
         uint256 owed = cumulative - withdrawnSoFar;
-        if (owed > $.assayPool[provider]) {
-            revert InsufficientAssayPool(owed, $.assayPool[provider]);
+        if (owed > a.pool) {
+            revert InsufficientAssayPool(owed, a.pool);
         }
 
-        // The verifier claiming its own cut is bounded by the on-chain cap;
-        // everything else in the voucher is already vouched for by its signature.
-        if (node == signer || node == $.prevAssaySigner[provider]) {
-            uint256 cap = ($.assayPoolDeposited[provider] * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
-            if (cumulative > cap) {
-                revert VerifierCutExceedsCap(cumulative, cap);
+        // The verifier claiming its own cut is bounded by the on-chain cap, counted
+        // per provider across signer rotations — a new signer address does not get a
+        // fresh allowance. Everything else in the voucher is already vouched for by
+        // its signature.
+        if (node == signer || node == a.prevSigner) {
+            uint256 cap = (a.deposited * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
+            uint256 paid = a.verifierPaid + owed;
+            if (paid > cap) {
+                revert VerifierCutExceedsCap(paid, cap);
             }
+            a.verifierPaid = paid;
         }
 
         // Effects before interaction (CEI): a reentrant claim sees withdrawn
         // already advanced and reverts with NothingToClaim.
         $.assayWithdrawn[provider][node] = cumulative;
-        $.assayTotalPaid[provider] += owed;
-        $.assayPool[provider] -= owed;
+        a.pool -= owed;
         emit PayoutClaimed(provider, node, cumulative, epoch, owed);
 
         (bool success, ) = payable(node).call{value: owed}("");
@@ -747,15 +758,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             uint totalPaid
         )
     {
-        InferenceServingStorage storage $ = _getInferenceServingStorage();
-        return (
-            $.assaySigner[provider],
-            $.prevAssaySigner[provider],
-            $.prevAssaySignerDeadline[provider],
-            $.assayPool[provider],
-            $.assayPoolDeposited[provider],
-            $.assayTotalPaid[provider]
-        );
+        AssayProvider storage a = _getInferenceServingStorage().assay[provider];
+        return (a.signer, a.prevSigner, a.prevSignerDeadline, a.pool, a.deposited, a.deposited - a.pool);
+    }
+
+    /// @notice Cumulative amount the verifier has claimed as its own cut from this
+    ///         provider's pool, across signer rotations (what the cut cap is checked against).
+    function assayVerifierPaidOf(address provider) external view returns (uint) {
+        return _getInferenceServingStorage().assay[provider].verifierPaid;
     }
 
     function assayWithdrawnOf(address provider, address node) external view returns (uint) {

@@ -40,19 +40,22 @@ describe("Assay Payout", () => {
 
     const voucherTypes = {
         PayoutVoucher: [
+            { name: "provider", type: "address" },
             { name: "node", type: "address" },
             { name: "cumulative", type: "uint256" },
             { name: "epoch", type: "uint64" },
         ],
     };
 
+    // A voucher is bound to the provider whose pool it draws on (provider1 unless said otherwise).
     async function signVoucher(
         wallet: ethers.Wallet,
         node: string,
         cumulative: bigint,
-        epoch: bigint
+        epoch: bigint,
+        provider: string = provider1Address
     ): Promise<string> {
-        return wallet.signTypedData(await domain(), voucherTypes, { node, cumulative, epoch });
+        return wallet.signTypedData(await domain(), voucherTypes, { provider, node, cumulative, epoch });
     }
 
     async function makeSettlement(user: string, totalFee: bigint): Promise<TEESettlementDataStruct> {
@@ -313,6 +316,7 @@ describe("Assay Payout", () => {
                 verifyingContract: await ledger.getAddress(), // any other address
             };
             const sig = await assayWallet.signTypedData(foreignDomain, voucherTypes, {
+                provider: provider1Address,
                 node: nodeAAddress,
                 cumulative: 300n,
                 epoch: 1n,
@@ -320,6 +324,25 @@ describe("Assay Payout", () => {
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
+        });
+
+        it("X4: a voucher for provider1 cannot be redeemed from another provider that shares the signer", async () => {
+            // The attacker runs a second provider registered with the SAME assay signer and an
+            // empty pool. Before the voucher bound the provider, provider1's voucher was a valid
+            // claim against the attacker's pool too (and vice versa).
+            await serving.connect(attacker).setAssaySigner(assayWallet.address, 0);
+            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n); // bound to provider1
+            await expect(
+                serving.connect(nodeA).claim(attacker.address, nodeAAddress, 300n, 1n, sig)
+            ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
+            expect(await poolOf(provider1Address)).to.equal(1000n);
+
+            // Bound to the attacker's provider it is well-formed — and finds no pool behind it.
+            const sigB = await signVoucher(assayWallet, nodeAAddress, 300n, 1n, attacker.address);
+            await expect(
+                serving.connect(nodeA).claim(attacker.address, nodeAAddress, 300n, 1n, sigB)
+            ).to.be.revertedWithCustomError(serving, "InsufficientAssayPool");
+            expect(await serving.assayWithdrawnOf(provider1Address, nodeAAddress)).to.equal(0n);
         });
 
         it("X3: a legacy TEESettlement signature is not a voucher", async () => {
@@ -488,6 +511,7 @@ describe("Assay Payout", () => {
 
             // the new key works
             const newSig = await newSigner.signTypedData(await domain(), voucherTypes, {
+                provider: provider1Address,
                 node: nodeAAddress,
                 cumulative: 400n,
                 epoch: 2n,
@@ -532,12 +556,58 @@ describe("Assay Payout", () => {
         });
     });
 
+    describe("Verifier cut cap across rotation", () => {
+        beforeEach(async () => {
+            await settleToPool(1000n);
+            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10% of 1000 deposited = 100
+        });
+
+        it("the cap is per provider, not per signer address: rotating the signer does not refill it", async () => {
+            const sig1 = await signVoucher(assayWallet, assayWallet.address, 60n, 1n);
+            await serving.connect(attacker).claim(provider1Address, assayWallet.address, 60n, 1n, sig1);
+            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(60n);
+
+            const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
+            await serving.connect(provider1).setAssaySigner(newSigner.address, 0);
+
+            // The new signer paying itself starts from the 60 already taken: 60 more breaks the cap…
+            const tooMuch = await newSigner.signTypedData(await domain(), voucherTypes, {
+                provider: provider1Address,
+                node: newSigner.address,
+                cumulative: 60n,
+                epoch: 2n,
+            });
+            await expect(
+                serving.connect(attacker).claim(provider1Address, newSigner.address, 60n, 2n, tooMuch)
+            )
+                .to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap")
+                .withArgs(120n, 100n);
+
+            // …40 fits exactly.
+            const ok = await newSigner.signTypedData(await domain(), voucherTypes, {
+                provider: provider1Address,
+                node: newSigner.address,
+                cumulative: 40n,
+                epoch: 2n,
+            });
+            await expect(
+                serving.connect(attacker).claim(provider1Address, newSigner.address, 40n, 2n, ok)
+            ).to.changeEtherBalance(newSigner.address, 40n);
+            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(100n);
+
+            // totalPaid is derived (deposited - pool) and conservation still holds.
+            const info = await serving.getAssayPayoutInfo(provider1Address);
+            expect(info.totalPaid).to.equal(100n);
+            expect(info.deposited).to.equal(info.pool + info.totalPaid);
+        });
+    });
+
     describe("Cross-language parity (testplan §7)", () => {
         it("a voucher signed by the Python assay (eth_account) recovers to the same signer", () => {
             // Vector produced by pipeline/tests/test_payout.py::test_parity_vector_stable —
             // regenerate there if the voucher encoding ever changes.
             const pySig =
-                "0x39efd09875b7dac3d2f8d2223e25f55d92a89c6690de3191e21c0b3f7996bcbd438060288743115ff72f330b49234791a8b75299bfad7cb493491ea24a4e7ceb1c";
+                "0x41e397985f94dc5e736e647aeee47e62d4b1b671e0464e5e109b2094c27e95c3410d6dd3f27af754479b772575f3c8146efe425afa7cf81ae1658abb651487f01b";
             const pySigner = new ethers.Wallet("0x" + "11".repeat(32));
             const pyDomain = {
                 name: "0G Inference Serving",
@@ -548,7 +618,12 @@ describe("Assay Payout", () => {
             const recovered = ethers.verifyTypedData(
                 pyDomain,
                 voucherTypes,
-                { node: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", cumulative: 12345n, epoch: 7n },
+                {
+                    provider: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                    node: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+                    cumulative: 12345n,
+                    epoch: 7n,
+                },
                 pySig
             );
             expect(recovered).to.equal(pySigner.address);
