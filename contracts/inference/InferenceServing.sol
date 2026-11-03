@@ -648,8 +648,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
         address old = a.signer;
+        if (old == signer) {
+            // Re-setting the current signer is a no-op: it must not cut short
+            // a running grace window (prevSigner's in-flight vouchers).
+            return;
+        }
         uint deadline = 0;
-        if (old != address(0) && old != signer && graceWindow > 0) {
+        if (old != address(0) && graceWindow > 0) {
             deadline = block.timestamp + graceWindow; // graceWindow <= 7 days: fits uint64
             a.prevSigner = old;
             a.prevSignerDeadline = uint64(deadline);

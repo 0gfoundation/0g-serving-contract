@@ -521,6 +521,17 @@ describe("Assay Payout", () => {
             ).to.changeEtherBalance(nodeA, 100n);
         });
 
+        it("A2c: re-setting the current signer during the grace does not cut it short", async () => {
+            const oldSig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
+            await serving.connect(provider1).setAssaySigner(newSigner.address, 3600);
+            // same signer again (an operator re-running its deploy step)
+            await serving.connect(provider1).setAssaySigner(newSigner.address, 0);
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, oldSig)
+            ).to.changeEtherBalance(nodeA, 300n);
+        });
+
         it("A2b: rotation with zero grace kills old vouchers immediately", async () => {
             const oldSig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
             await serving.connect(provider1).setAssaySigner(rogueWallet.address, 0);
