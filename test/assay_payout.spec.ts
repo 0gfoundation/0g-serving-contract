@@ -726,7 +726,8 @@ describe("Assay Payout", () => {
                 .withArgs(provider1Address, 700n);
             info = await serving.getAssayPayoutInfo(provider1Address);
             expect(info.pool).to.equal(0n);
-            expect(info.deposited).to.equal(info.pool + info.totalPaid); // the withdrawal counts as paid out
+            expect(info.deposited).to.equal(300n); // the 700 withdrawn no longer counts as deposited
+            expect(info.totalPaid).to.equal(300n); // = what nodes claimed, withdrawals excluded
             await expect(serving.connect(provider1).withdrawAssayPool()).to.be.revertedWithCustomError(
                 serving,
                 "AssayPoolEmpty"
@@ -752,15 +753,15 @@ describe("Assay Payout", () => {
             await serving.connect(provider1).setAssaySigner(assayWallet.address, 0);
             await settleToPool(1000n);
             expect(await poolOf(provider1Address)).to.equal(1000n);
-            // cap = 10% of 2000 deposited = 200; 60 already taken → 140 more fits, 141 does not
-            const tooMuch = await signVoucher(assayWallet, assayWallet.address, 201n, 2n);
+            // deposited = 1000 − 940 withdrawn + 1000 = 1060 → cap 106; 60 already taken → 46 more fits, 47 does not
+            const tooMuch = await signVoucher(assayWallet, assayWallet.address, 107n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet.address, 201n, 2n, tooMuch)
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 107n, 2n, tooMuch)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
-            const ok = await signVoucher(assayWallet, assayWallet.address, 200n, 2n);
+            const ok = await signVoucher(assayWallet, assayWallet.address, 106n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet.address, 200n, 2n, ok)
-            ).to.changeEtherBalance(assayWallet.address, 140n);
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 106n, 2n, ok)
+            ).to.changeEtherBalance(assayWallet.address, 46n);
         });
 
         it("E4: guards — clear without a signer, withdraw while in assay mode, grace too long", async () => {
@@ -780,15 +781,44 @@ describe("Assay Payout", () => {
             expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
         });
 
-        it("E5: a rotation while the clear grace is running replaces the grace, as any rotation does", async () => {
+        it("E5: re-registering a signer while the clear grace runs keeps that grace; the pool relocks", async () => {
             const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
             await serving.connect(provider1).clearAssaySigner(3600);
             const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
             await serving.connect(provider1).setAssaySigner(newSigner.address, 0);
-            // old == 0 → no grace carried; the previous signer's vouchers are dead
+            const info = await serving.getAssayPayoutInfo(provider1Address);
+            expect(info.prevSigner).to.equal(assayWallet.address);
+            await expect(serving.connect(provider1).withdrawAssayPool()).to.be.revertedWithCustomError(
+                serving,
+                "AssayPoolLocked"
+            );
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
+            ).to.changeEtherBalance(nodeA, 300n);
+            await time.increase(3601);
+            const late = await signVoucher(assayWallet, nodeAAddress, 400n, 2n);
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 400n, 2n, late)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
+        });
+
+        it("E6: withdrawn money does not back the cut cap: after exit + re-entry the cut is a share of new deposits only", async () => {
+            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10%
+            await serving.connect(provider1).clearAssaySigner(0);
+            await serving.connect(provider1).withdrawAssayPool(); // 1000 back; deposited → 0
+            await serving.connect(provider1).setAssaySigner(assayWallet.address, 0);
+            await settleToPool(100n);
+            // cap = 10% of 100, not of 1100: a self-voucher for the whole new pool reverts
+            const grab = await signVoucher(assayWallet, assayWallet.address, 100n, 1n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 100n, 1n, grab)
+            )
+                .to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap")
+                .withArgs(100n, 10n);
+            const cut = await signVoucher(assayWallet, assayWallet.address, 10n, 1n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 10n, 1n, cut)
+            ).to.changeEtherBalance(assayWallet.address, 10n);
         });
     });
 

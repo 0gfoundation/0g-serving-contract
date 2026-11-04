@@ -56,7 +56,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         uint64 prevSignerDeadline; // grace deadline for prevSigner (0 = none)
         address prevSigner; // rotated-out signer, valid until prevSignerDeadline
         uint pool; // claimable balance
-        uint deposited; // cumulative amount ever pooled
+        uint deposited; // cumulative amount pooled, net of provider withdrawals (cut-cap base)
         uint verifierPaid; // cumulative amount claimed by the verifier as its cut, across signer rotations
     }
 
@@ -678,14 +678,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function _rotateAssaySigner(AssayProvider storage a, address signer, uint graceWindow) private {
         address old = a.signer;
         uint deadline = 0;
-        if (old != address(0) && graceWindow > 0) {
-            deadline = block.timestamp + graceWindow; // graceWindow <= 7 days: fits uint64
-            a.prevSigner = old;
-            a.prevSignerDeadline = uint64(deadline);
-        } else {
-            a.prevSigner = address(0);
-            a.prevSignerDeadline = 0;
+        if (old != address(0)) {
+            if (graceWindow > 0) {
+                deadline = block.timestamp + graceWindow; // graceWindow <= 7 days: fits uint64
+                a.prevSigner = old;
+                a.prevSignerDeadline = uint64(deadline);
+            } else {
+                a.prevSigner = address(0);
+                a.prevSignerDeadline = 0;
+            }
         }
+        // old == 0: re-entering after a clear. The clear's grace (if still
+        // running) is left alone so its in-flight vouchers keep clearing.
         a.signer = signer;
         emit AssaySignerUpdated(msg.sender, old, signer, deadline);
     }
@@ -715,6 +719,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert AssayPoolEmpty(msg.sender);
         }
         a.pool = 0;
+        a.deposited -= amount; // withdrawn money never backs the cut cap again
         emit AssayPoolWithdrawn(msg.sender, amount);
         (bool success, ) = payable(msg.sender).call{value: amount}("");
         if (!success) {
@@ -770,7 +775,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         // Only payees the provider listed are paid; the verifier's own address is
         // instead bounded by the cut cap below. node != 0 was checked above, so a
-        // zero signer / prev never matches.
+        // zero signer / prev never matches. prevSigner is read ungated on purpose:
+        // an expired old signer's address stays cap-bounded rather than listable.
         bool verifierNode = node == signer || node == a.prevSigner;
         if (!verifierNode && !$.assayNode[provider][node]) {
             revert AssayNodeNotAllowed(provider, node);
