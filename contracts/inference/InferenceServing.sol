@@ -724,6 +724,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // ...and the cut already taken against it is forgiven to the same degree,
         // or the verifier's next cumulative cut voucher would revert until new
         // deposits grow the cap back past what it was paid before the exit.
+        // Measured at the current bps: an owner that lowers the cap before a
+        // withdrawal and raises it after hands the verifier that much fresh
+        // allowance (owner-trusted, same trust as setting the cap at all).
         uint cap = (a.deposited * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
         if (a.verifierPaid > cap) {
             a.verifierPaid = cap;
