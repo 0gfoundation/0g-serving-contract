@@ -743,7 +743,7 @@ describe("Assay Payout", () => {
             await expect(serving.connect(provider1).withdrawAssayPool()).to.changeEtherBalance(provider1, 1000n);
         });
 
-        it("E3: opting back in resumes pooling, and the old signer's cut history is kept", async () => {
+        it("E3: opting back in resumes pooling; the cut history survives, less the share forgiven by the withdrawal", async () => {
             await serving.connect(owner).setAssayVerifierCutCap(1000);
             const cut = await signVoucher(assayWallet, assayWallet.address, 60n, 1n);
             await serving.connect(attacker).claim(provider1Address, assayWallet.address, 60n, 1n, cut);
@@ -753,15 +753,41 @@ describe("Assay Payout", () => {
             await serving.connect(provider1).setAssaySigner(assayWallet.address, 0);
             await settleToPool(1000n);
             expect(await poolOf(provider1Address)).to.equal(1000n);
-            // deposited = 1000 − 940 withdrawn + 1000 = 1060 → cap 106; 60 already taken → 46 more fits, 47 does not
-            const tooMuch = await signVoucher(assayWallet, assayWallet.address, 107n, 2n);
+            // withdraw of 940: deposited 60, cap 6, verifierPaid clamped 60 → 6; then +1000 deposited → cap 106:
+            // 100 more cut fits (cumulative 160), 101 does not
+            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(6n);
+            const tooMuch = await signVoucher(assayWallet, assayWallet.address, 161n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet.address, 107n, 2n, tooMuch)
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 161n, 2n, tooMuch)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
-            const ok = await signVoucher(assayWallet, assayWallet.address, 106n, 2n);
+            const ok = await signVoucher(assayWallet, assayWallet.address, 160n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet.address, 106n, 2n, ok)
-            ).to.changeEtherBalance(assayWallet.address, 46n);
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 160n, 2n, ok)
+            ).to.changeEtherBalance(assayWallet.address, 100n);
+            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(106n);
+        });
+
+        it("E7: a withdrawal forgives the cut already taken against the withdrawn money, so the verifier's next cumulative cut clears", async () => {
+            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10%
+            const cut1 = await signVoucher(assayWallet, assayWallet.address, 100n, 1n);
+            await serving.connect(attacker).claim(provider1Address, assayWallet.address, 100n, 1n, cut1);
+            const nodeSig = await signVoucher(assayWallet, nodeAAddress, 500n, 1n);
+            await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 500n, 1n, nodeSig);
+            await serving.connect(provider1).clearAssaySigner(0);
+            await serving.connect(provider1).withdrawAssayPool(); // 400 back; deposited 600, cap 60
+            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(60n);
+
+            await serving.connect(provider1).setAssaySigner(assayWallet.address, 0);
+            await settleToPool(1000n); // deposited 1600, cap 160: 100 more cut fits
+            const cut2 = await signVoucher(assayWallet, assayWallet.address, 200n, 2n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 200n, 2n, cut2)
+            ).to.changeEtherBalance(assayWallet.address, 100n);
+            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(160n);
+            const cut3 = await signVoucher(assayWallet, assayWallet.address, 201n, 3n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 201n, 3n, cut3)
+            ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
         });
 
         it("E4: guards — clear without a signer, withdraw while in assay mode, grace too long", async () => {

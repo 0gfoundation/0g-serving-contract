@@ -618,9 +618,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
         // Batch transfer all settled amounts at once.
         // Assay mode (provider registered an assay signer): settled funds are
-        // credited to the provider's assay pool and leave only via claim() —
-        // the provider wallet never receives them directly (design: the
-        // contract is the only place funds move).
+        // credited to the provider's assay pool and leave via claim(), or via
+        // withdrawAssayPool() once the provider has left assay mode (design:
+        // the contract is the only place funds move).
         if (totalTransferAmount > 0) {
             AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
             if (a.signer != address(0)) {
@@ -710,7 +710,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///         the provider takes back whatever is left in its pool (fees no
     ///         voucher ever attributed, or vouchers nobody redeemed in time).
     function withdrawAssayPool() external nonReentrant {
-        AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        AssayProvider storage a = $.assay[msg.sender];
         if (a.signer != address(0) || block.timestamp <= a.prevSignerDeadline) {
             revert AssayPoolLocked(msg.sender, a.prevSignerDeadline);
         }
@@ -720,6 +721,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         a.pool = 0;
         a.deposited -= amount; // withdrawn money never backs the cut cap again
+        // ...and the cut already taken against it is forgiven to the same degree,
+        // or the verifier's next cumulative cut voucher would revert until new
+        // deposits grow the cap back past what it was paid before the exit.
+        uint cap = (a.deposited * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
+        if (a.verifierPaid > cap) {
+            a.verifierPaid = cap;
+        }
         emit AssayPoolWithdrawn(msg.sender, amount);
         (bool success, ) = payable(msg.sender).call{value: amount}("");
         if (!success) {
