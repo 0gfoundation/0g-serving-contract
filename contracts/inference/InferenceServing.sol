@@ -688,8 +688,12 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
                 a.prevSignerDeadline = 0;
             }
         }
-        // old == 0: re-entering after a clear. The clear's grace (if still
-        // running) is left alone so its in-flight vouchers keep clearing.
+        if (old == address(0)) {
+            // Re-entering after a clear: the clear's grace (if still running) is
+            // left alone so its in-flight vouchers keep clearing; graceWindow is
+            // not used. The event carries the surviving deadline.
+            deadline = a.prevSignerDeadline;
+        }
         a.signer = signer;
         emit AssaySignerUpdated(msg.sender, old, signer, deadline);
     }
