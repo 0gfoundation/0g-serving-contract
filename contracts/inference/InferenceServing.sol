@@ -45,6 +45,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         mapping(address => AssayProvider) assay; // provider => pool + signer state
         mapping(address => mapping(address => uint)) assayWithdrawn; // provider => node => cumulative withdrawn
         uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
+        mapping(address => mapping(address => bool)) assayNode; // provider => payee allowed to claim
     }
 
     /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
@@ -144,6 +145,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     );
     event AssayVerifierCutCapUpdated(uint capBps);
     event AssayPoolFunded(address indexed provider, uint amount, uint poolBalance);
+    event AssayPoolWithdrawn(address indexed provider, uint amount);
+    event AssayNodeUpdated(address indexed provider, address indexed node, bool allowed);
     event PayoutClaimed(address indexed provider, address indexed node, uint cumulative, uint64 epoch, uint owed);
 
     // Custom errors
@@ -166,6 +169,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error InsufficientAssayPool(uint256 owed, uint256 pool);
     error VerifierCutExceedsCap(uint256 cumulative, uint256 cap);
     error GraceWindowTooLong(uint256 window, uint256 max);
+    error AssayNodeNotAllowed(address provider, address node);
+    error AssayPoolLocked(address provider, uint256 until);
+    error AssayPoolEmpty(address provider);
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -647,12 +653,30 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert GraceWindowTooLong(graceWindow, MAX_SIGNER_GRACE);
         }
         AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
-        address old = a.signer;
-        if (old == signer) {
+        if (a.signer == signer) {
             // Re-setting the current signer is a no-op: it must not cut short
             // a running grace window (prevSigner's in-flight vouchers).
             return;
         }
+        _rotateAssaySigner(a, signer, graceWindow);
+    }
+
+    /// @notice Leave assay mode: settlements go back to the provider wallet from
+    ///         the next round. The current signer's in-flight vouchers stay
+    ///         claimable for graceWindow; after that the pool can be withdrawn.
+    function clearAssaySigner(uint graceWindow) external {
+        if (graceWindow > MAX_SIGNER_GRACE) {
+            revert GraceWindowTooLong(graceWindow, MAX_SIGNER_GRACE);
+        }
+        AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+        if (a.signer == address(0)) {
+            revert AssaySignerNotSet(msg.sender);
+        }
+        _rotateAssaySigner(a, address(0), graceWindow);
+    }
+
+    function _rotateAssaySigner(AssayProvider storage a, address signer, uint graceWindow) private {
+        address old = a.signer;
         uint deadline = 0;
         if (old != address(0) && graceWindow > 0) {
             deadline = block.timestamp + graceWindow; // graceWindow <= 7 days: fits uint64
@@ -664,6 +688,38 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         a.signer = signer;
         emit AssaySignerUpdated(msg.sender, old, signer, deadline);
+    }
+
+    /// @notice Allow or revoke a payee address for the calling provider's pool.
+    ///         claim() pays only listed nodes (the signer's own cut is governed
+    ///         by the cap instead), so a signer cannot route the pool to an
+    ///         address the provider never approved.
+    function setAssayNode(address node, bool allowed) external {
+        if (node == address(0)) {
+            revert InvalidAddress(node);
+        }
+        _getInferenceServingStorage().assayNode[msg.sender][node] = allowed;
+        emit AssayNodeUpdated(msg.sender, node, allowed);
+    }
+
+    /// @notice After leaving assay mode and once the grace window has passed,
+    ///         the provider takes back whatever is left in its pool (fees no
+    ///         voucher ever attributed, or vouchers nobody redeemed in time).
+    function withdrawAssayPool() external nonReentrant {
+        AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+        if (a.signer != address(0) || block.timestamp <= a.prevSignerDeadline) {
+            revert AssayPoolLocked(msg.sender, a.prevSignerDeadline);
+        }
+        uint amount = a.pool;
+        if (amount == 0) {
+            revert AssayPoolEmpty(msg.sender);
+        }
+        a.pool = 0;
+        emit AssayPoolWithdrawn(msg.sender, amount);
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        if (!success) {
+            revert TransferFailed();
+        }
     }
 
     /// @notice Cap (in basis points of the provider's cumulative pool deposits) on the
@@ -696,7 +752,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         AssayProvider storage a = $.assay[provider];
         address signer = a.signer;
-        if (signer == address(0)) {
+        // A cleared or rotated-out signer keeps its in-flight vouchers claimable
+        // until the grace deadline so rotation / exit cannot strand funds (A2).
+        address prev = block.timestamp <= a.prevSignerDeadline ? a.prevSigner : address(0);
+        if (signer == address(0) && prev == address(0)) {
             revert AssaySignerNotSet(provider);
         }
 
@@ -706,13 +765,15 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (recoverError != ECDSA.RecoverError.NoError) {
             revert InvalidVoucherSignature();
         }
-        if (recovered != signer) {
-            // Rotation grace: in-flight vouchers from the previous signer stay
-            // claimable until the deadline so rotation cannot strand funds (A2).
-            address prev = a.prevSigner;
-            if (prev == address(0) || recovered != prev || block.timestamp > a.prevSignerDeadline) {
-                revert InvalidVoucherSignature();
-            }
+        if (recovered != signer && recovered != prev) {
+            revert InvalidVoucherSignature();
+        }
+        // Only payees the provider listed are paid; the verifier's own address is
+        // instead bounded by the cut cap below. node != 0 was checked above, so a
+        // zero signer / prev never matches.
+        bool verifierNode = node == signer || node == a.prevSigner;
+        if (!verifierNode && !$.assayNode[provider][node]) {
+            revert AssayNodeNotAllowed(provider, node);
         }
 
         uint256 withdrawnSoFar = $.assayWithdrawn[provider][node];
@@ -728,7 +789,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // per provider across signer rotations — a new signer address does not get a
         // fresh allowance. Everything else in the voucher is already vouched for by
         // its signature.
-        if (node == signer || node == a.prevSigner) {
+        if (verifierNode) {
             uint256 cap = (a.deposited * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
             uint256 paid = a.verifierPaid + owed;
             if (paid > cap) {
@@ -776,6 +837,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function assayWithdrawnOf(address provider, address node) external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.assayWithdrawn[provider][node];
+    }
+
+    function isAssayNode(address provider, address node) external view returns (bool) {
+        return _getInferenceServingStorage().assayNode[provider][node];
     }
 
     function assayVerifierCutCapBps() external view returns (uint) {

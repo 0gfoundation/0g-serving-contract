@@ -124,8 +124,10 @@ describe("Assay Payout", () => {
         await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
         await serving.connect(owner).acknowledgeTEESigner(provider1Address, true);
 
-        // Assay mode on for provider1
+        // Assay mode on for provider1; nodeA / nodeB are its listed payees
         await serving.connect(provider1).setAssaySigner(assayWallet.address, 0);
+        await serving.connect(provider1).setAssayNode(nodeAAddress, true);
+        await serving.connect(provider1).setAssayNode(nodeBAddress, true);
     });
 
     describe("Pool funding", () => {
@@ -337,7 +339,8 @@ describe("Assay Payout", () => {
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
             expect(await poolOf(provider1Address)).to.equal(1000n);
 
-            // Bound to the attacker's provider it is well-formed — and finds no pool behind it.
+            // Bound to the attacker's provider (which lists nodeA) it is well-formed — and finds no pool behind it.
+            await serving.connect(attacker).setAssayNode(nodeAAddress, true);
             const sigB = await signVoucher(assayWallet, nodeAAddress, 300n, 1n, attacker.address);
             await expect(
                 serving.connect(nodeA).claim(attacker.address, nodeAAddress, 300n, 1n, sigB)
@@ -400,6 +403,7 @@ describe("Assay Payout", () => {
         it("P4: a node that reverts on receive only breaks its own claim", async () => {
             const reverting = await (await ethers.getContractFactory("RevertingReceiver")).deploy();
             const revertingAddr = await reverting.getAddress();
+            await serving.connect(provider1).setAssayNode(revertingAddr, true);
             const sig = await signVoucher(assayWallet, revertingAddr, 300n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, revertingAddr, 300n, 1n, sig)
@@ -443,6 +447,7 @@ describe("Assay Payout", () => {
         it("RE1: reentering claim from the receive hook pays exactly once", async () => {
             const claimer = await (await ethers.getContractFactory("ReentrantClaimer")).deploy();
             const claimerAddr = await claimer.getAddress();
+            await serving.connect(provider1).setAssayNode(claimerAddr, true);
             const sig = await signVoucher(assayWallet, claimerAddr, 300n, 1n);
             await claimer.arm(await serving.getAddress(), provider1Address, 300n, 1n, sig);
             await claimer.doClaim();
@@ -455,6 +460,7 @@ describe("Assay Payout", () => {
         it("RE3: a gas-heavy receive hook only affects its own claim", async () => {
             const heavy = await (await ethers.getContractFactory("GasHeavyReceiver")).deploy();
             const heavyAddr = await heavy.getAddress();
+            await serving.connect(provider1).setAssayNode(heavyAddr, true);
             const sig = await signVoucher(assayWallet, heavyAddr, 100n, 1n);
             await serving.connect(attacker).claim(provider1Address, heavyAddr, 100n, 1n, sig);
             const sigA = await signVoucher(assayWallet, nodeAAddress, 100n, 1n);
@@ -610,6 +616,179 @@ describe("Assay Payout", () => {
             const info = await serving.getAssayPayoutInfo(provider1Address);
             expect(info.totalPaid).to.equal(100n);
             expect(info.deposited).to.equal(info.pool + info.totalPaid);
+        });
+    });
+
+    describe("Node allowlist", () => {
+        beforeEach(async () => {
+            await settleToPool(1000n);
+        });
+
+        it("L1: a valid voucher for an address the provider never listed reverts; listing it pays", async () => {
+            const stray = await attacker.getAddress();
+            const sig = await signVoucher(assayWallet, stray, 300n, 1n);
+            await expect(serving.connect(attacker).claim(provider1Address, stray, 300n, 1n, sig))
+                .to.be.revertedWithCustomError(serving, "AssayNodeNotAllowed")
+                .withArgs(provider1Address, stray);
+            expect(await serving.isAssayNode(provider1Address, stray)).to.be.false;
+
+            await expect(serving.connect(provider1).setAssayNode(stray, true))
+                .to.emit(serving, "AssayNodeUpdated")
+                .withArgs(provider1Address, stray, true);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, stray, 300n, 1n, sig)
+            ).to.changeEtherBalance(attacker, 300n);
+        });
+
+        it("L2: revoking a node stops its next voucher; what it already withdrew stays withdrawn", async () => {
+            const sig1 = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig1);
+            await serving.connect(provider1).setAssayNode(nodeAAddress, false);
+            const sig2 = await signVoucher(assayWallet, nodeAAddress, 500n, 2n);
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 500n, 2n, sig2)
+            ).to.be.revertedWithCustomError(serving, "AssayNodeNotAllowed");
+            expect(await serving.assayWithdrawnOf(provider1Address, nodeAAddress)).to.equal(300n);
+            // re-listed: the cumulative voucher pays the delta, nothing was lost
+            await serving.connect(provider1).setAssayNode(nodeAAddress, true);
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 500n, 2n, sig2)
+            ).to.changeEtherBalance(nodeA, 200n);
+        });
+
+        it("L3: a list entry is per provider: another account listing an address does not open provider1's pool", async () => {
+            const stray = await attacker.getAddress();
+            await serving.connect(attacker).setAssayNode(stray, true);
+            const sig = await signVoucher(assayWallet, stray, 300n, 1n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, stray, 300n, 1n, sig)
+            ).to.be.revertedWithCustomError(serving, "AssayNodeNotAllowed");
+        });
+
+        it("L4: the signer's own address needs no listing but stays under the cut cap", async () => {
+            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10% of 1000
+            const sig = await signVoucher(assayWallet, assayWallet.address, 100n, 1n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 100n, 1n, sig)
+            ).to.changeEtherBalance(assayWallet.address, 100n);
+            const more = await signVoucher(assayWallet, assayWallet.address, 101n, 2n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 101n, 2n, more)
+            ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
+        });
+
+        it("L5: node == address(0) cannot be listed", async () => {
+            await expect(
+                serving.connect(provider1).setAssayNode(ethers.ZeroAddress, true)
+            ).to.be.revertedWithCustomError(serving, "InvalidAddress");
+        });
+    });
+
+    describe("Leaving assay mode", () => {
+        beforeEach(async () => {
+            await settleToPool(1000n);
+        });
+
+        it("E1: clear with a grace: in-flight vouchers still pay, settlements go to the wallet, the rest is withdrawable after the grace", async () => {
+            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            await expect(serving.connect(provider1).clearAssaySigner(3600))
+                .to.emit(serving, "AssaySignerUpdated")
+                .withArgs(provider1Address, assayWallet.address, ethers.ZeroAddress, (d: bigint) => d > 0n);
+            let info = await serving.getAssayPayoutInfo(provider1Address);
+            expect(info.signer).to.equal(ethers.ZeroAddress);
+            expect(info.prevSigner).to.equal(assayWallet.address);
+
+            // a settlement after the clear pays the wallet, not the pool
+            const settlement = await makeSettlement(ownerAddress, 200n);
+            await expect(serving.connect(provider1).settleFeesWithTEE([settlement])).to.changeEtherBalance(
+                provider1,
+                200n
+            );
+            expect(await poolOf(provider1Address)).to.equal(1000n);
+
+            // the old signer's voucher still clears inside the grace
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
+            ).to.changeEtherBalance(nodeA, 300n);
+            // the pool is locked while the grace runs
+            await expect(serving.connect(provider1).withdrawAssayPool()).to.be.revertedWithCustomError(
+                serving,
+                "AssayPoolLocked"
+            );
+
+            await time.increase(3601);
+            const late = await signVoucher(assayWallet, nodeAAddress, 400n, 2n);
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 400n, 2n, late)
+            ).to.be.revertedWithCustomError(serving, "AssaySignerNotSet");
+            await expect(serving.connect(provider1).withdrawAssayPool())
+                .to.emit(serving, "AssayPoolWithdrawn")
+                .withArgs(provider1Address, 700n);
+            info = await serving.getAssayPayoutInfo(provider1Address);
+            expect(info.pool).to.equal(0n);
+            expect(info.deposited).to.equal(info.pool + info.totalPaid); // the withdrawal counts as paid out
+            await expect(serving.connect(provider1).withdrawAssayPool()).to.be.revertedWithCustomError(
+                serving,
+                "AssayPoolEmpty"
+            );
+        });
+
+        it("E2: clear with zero grace kills old vouchers at once and the pool is withdrawable at once", async () => {
+            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(provider1).clearAssaySigner(0);
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
+            ).to.be.revertedWithCustomError(serving, "AssaySignerNotSet");
+            await expect(serving.connect(provider1).withdrawAssayPool()).to.changeEtherBalance(provider1, 1000n);
+        });
+
+        it("E3: opting back in resumes pooling, and the old signer's cut history is kept", async () => {
+            await serving.connect(owner).setAssayVerifierCutCap(1000);
+            const cut = await signVoucher(assayWallet, assayWallet.address, 60n, 1n);
+            await serving.connect(attacker).claim(provider1Address, assayWallet.address, 60n, 1n, cut);
+            await serving.connect(provider1).clearAssaySigner(0);
+            await serving.connect(provider1).withdrawAssayPool();
+
+            await serving.connect(provider1).setAssaySigner(assayWallet.address, 0);
+            await settleToPool(1000n);
+            expect(await poolOf(provider1Address)).to.equal(1000n);
+            // cap = 10% of 2000 deposited = 200; 60 already taken → 140 more fits, 141 does not
+            const tooMuch = await signVoucher(assayWallet, assayWallet.address, 201n, 2n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 201n, 2n, tooMuch)
+            ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
+            const ok = await signVoucher(assayWallet, assayWallet.address, 200n, 2n);
+            await expect(
+                serving.connect(attacker).claim(provider1Address, assayWallet.address, 200n, 2n, ok)
+            ).to.changeEtherBalance(assayWallet.address, 140n);
+        });
+
+        it("E4: guards — clear without a signer, withdraw while in assay mode, grace too long", async () => {
+            await expect(serving.connect(provider1).withdrawAssayPool()).to.be.revertedWithCustomError(
+                serving,
+                "AssayPoolLocked"
+            );
+            await expect(serving.connect(provider1).clearAssaySigner(8 * 24 * 60 * 60)).to.be.revertedWithCustomError(
+                serving,
+                "GraceWindowTooLong"
+            );
+            await expect(serving.connect(attacker).clearAssaySigner(0)).to.be.revertedWithCustomError(
+                serving,
+                "AssaySignerNotSet"
+            );
+            // another account cannot clear provider1's signer
+            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
+        });
+
+        it("E5: a rotation while the clear grace is running replaces the grace, as any rotation does", async () => {
+            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(provider1).clearAssaySigner(3600);
+            const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
+            await serving.connect(provider1).setAssaySigner(newSigner.address, 0);
+            // old == 0 → no grace carried; the previous signer's vouchers are dead
+            await expect(
+                serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
+            ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
         });
     });
 
