@@ -10,7 +10,6 @@ dotenv.config();
 const ZG_TESTNET_V4_PRIVATE_KEY = process.env.ZG_TESTNET_V4_PRIVATE_KEY || "";
 const ZG_TESTNET_DEV_PRIVATE_KEY = process.env.ZG_TESTNET_DEV_PRIVATE_KEY || "";
 const ZG_MAINNET_PRIVATE_KEY = process.env.ZG_MAINNET_PRIVATE_KEY || "";
-const ZG_TESTNET_ASSAY_PRIVATE_KEY = process.env.ZG_TESTNET_ASSAY_PRIVATE_KEY || "";
 
 // Only pass keys that are actually set: hardhat rejects empty strings in
 // `accounts` at config-load time, which breaks every network at once.
@@ -104,12 +103,6 @@ const config: HardhatUserConfig = {
             chainId: 16602,
             gasPrice: 12000000000,
         },        
-        zgTestnetAssay: {
-            url: "https://evmrpc-testnet.0g.ai",
-            accounts: accountsOf(ZG_TESTNET_ASSAY_PRIVATE_KEY),
-            chainId: 16602,
-            gasPrice: 12000000000,
-        },
         zgMainnet: {
             url: "https://evmrpc.0g.ai",
             accounts: accountsOf(ZG_MAINNET_PRIVATE_KEY),
@@ -119,21 +112,12 @@ const config: HardhatUserConfig = {
     },
     etherscan: {
         apiKey: {
-            zgTestnetAssay: "00",
             zgTestnetV4: "00",
             zgTestnetDev: "00",
             zgTestnetMigrate: "00",
             zgMainnet: "00",
         },
         customChains: [
-            {
-                network: "zgTestnetAssay",
-                chainId: 16602,
-                urls: {
-                    apiURL: "https://chainscan-galileo.0g.ai/open/api",
-                    browserURL: "https://chainscan-galileo.0g.ai",
-                },
-            },
             {
                 network: "zgTestnetV4",
                 chainId: 16602,
