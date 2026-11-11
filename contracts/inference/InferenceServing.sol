@@ -46,6 +46,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         mapping(address => mapping(address => uint)) assayWithdrawn; // provider => node => cumulative withdrawn
         uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
         mapping(address => mapping(address => bool)) assayNode; // provider => payee allowed to claim
+        mapping(address => bool) assaySignerApproved; // owner-approved voucher signers
     }
 
     /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
@@ -86,8 +87,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     string private constant DOMAIN_NAME = "0G Inference Serving";
     string private constant DOMAIN_VERSION = "1";
 
-    // Assay payout: bound the grace window so a rotated-out key cannot stay valid indefinitely
-    uint public constant MAX_SIGNER_GRACE = 7 days;
+    // Assay payout: how long a rotated-out or cleared signer's vouchers stay claimable,
+    // and how long after leaving assay mode the pool stays locked. Fixed, so the
+    // provider cannot shorten the notice its nodes get.
+    uint public constant SIGNER_GRACE = 7 days;
     uint private constant BPS_DENOMINATOR = 10000;
 
     function _getInferenceServingStorage() private pure returns (InferenceServingStorage storage $) {
@@ -146,7 +149,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AssayVerifierCutCapUpdated(uint capBps);
     event AssayPoolFunded(address indexed provider, uint amount, uint poolBalance);
     event AssayPoolWithdrawn(address indexed provider, uint amount);
-    event AssayNodeUpdated(address indexed provider, address indexed node, bool allowed);
+    event AssayNodeAllowed(address indexed provider, address indexed node);
+    event AssaySignerApprovalUpdated(address indexed signer, bool approved);
     event PayoutClaimed(address indexed provider, address indexed node, uint cumulative, uint64 epoch, uint owed);
 
     // Custom errors
@@ -168,7 +172,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error NothingToClaim(uint256 cumulative, uint256 withdrawn);
     error InsufficientAssayPool(uint256 owed, uint256 pool);
     error VerifierCutExceedsCap(uint256 cumulative, uint256 cap);
-    error GraceWindowTooLong(uint256 window, uint256 max);
+    error AssaySignerNotApproved(address signer);
     error AssayNodeNotAllowed(address provider, address node);
     error AssayPoolLocked(address provider, uint256 until);
     error AssayPoolEmpty(address provider);
@@ -619,7 +623,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // Batch transfer all settled amounts at once.
         // Assay mode (provider registered an assay signer): settled funds are
         // credited to the provider's assay pool and leave via claim(), or via
-        // withdrawAssayPool() once the provider has left assay mode (design:
+        // the owner's withdrawAssayPool() once the provider has left assay mode (design:
         // the contract is the only place funds move).
         if (totalTransferAmount > 0) {
             AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
@@ -638,90 +642,101 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     // === SPML assay payout ===
 
+    /// @notice Approve or revoke an address as an assay voucher signer. Providers can
+    ///         only register approved signers: whether a key really is the assay
+    ///         verifier's (derived inside its attested TEE) cannot be checked on-chain,
+    ///         so the owner vouches for it. Revoking stops the address from being
+    ///         registered again; it does not unseat a signer a provider already uses.
+    function setAssaySignerApproval(address signer, bool approved) external onlyOwner {
+        if (signer == address(0)) {
+            revert InvalidAddress(signer);
+        }
+        _getInferenceServingStorage().assaySignerApproved[signer] = approved;
+        emit AssaySignerApprovalUpdated(signer, approved);
+    }
+
     /// @notice Register or rotate the assay voucher signer for the calling provider.
     ///         A non-zero signer switches the provider's settlements into assay-pool
     ///         mode: settled funds accumulate in the pool and GPUs withdraw them via
     ///         claim() with an EIP-712 PayoutVoucher signed by this signer.
-    /// @param signer The assay verifier's secp256k1 address (never zero)
-    /// @param graceWindow Seconds the previous signer's in-flight vouchers stay
-    ///        claimable after rotation (0 = old vouchers die immediately)
-    function setAssaySigner(address signer, uint graceWindow) external {
+    ///         On rotation the previous signer's in-flight vouchers stay claimable
+    ///         for SIGNER_GRACE.
+    /// @dev Trust model: the pool is controlled by whoever signs vouchers, and the
+    ///      provider picks that signer among the owner-approved ones. Nodes are
+    ///      protected from the provider by the approval and by SIGNER_GRACE (a fixed
+    ///      notice period), not unconditionally.
+    /// @param signer The assay verifier's secp256k1 address (owner-approved, never zero)
+    function setAssaySigner(address signer) external {
         if (signer == address(0)) {
             revert InvalidAddress(signer);
         }
-        if (graceWindow > MAX_SIGNER_GRACE) {
-            revert GraceWindowTooLong(graceWindow, MAX_SIGNER_GRACE);
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        if (!$.assaySignerApproved[signer]) {
+            revert AssaySignerNotApproved(signer);
         }
-        AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+        AssayProvider storage a = $.assay[msg.sender];
         if (a.signer == signer) {
-            // Re-setting the current signer is a no-op: it must not cut short
-            // a running grace window (prevSigner's in-flight vouchers).
+            // Re-setting the current signer is a no-op: it must not restart or cut
+            // short a running grace window (prevSigner's in-flight vouchers).
             return;
         }
-        _rotateAssaySigner(a, signer, graceWindow);
+        _rotateAssaySigner(a, signer);
     }
 
     /// @notice Leave assay mode: settlements go back to the provider wallet from
     ///         the next round. The current signer's in-flight vouchers stay
-    ///         claimable for graceWindow; after that the pool can be withdrawn.
-    function clearAssaySigner(uint graceWindow) external {
-        if (graceWindow > MAX_SIGNER_GRACE) {
-            revert GraceWindowTooLong(graceWindow, MAX_SIGNER_GRACE);
-        }
+    ///         claimable for SIGNER_GRACE; after that the owner can return what is
+    ///         left in the pool (withdrawAssayPool).
+    function clearAssaySigner() external {
         AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
         if (a.signer == address(0)) {
             revert AssaySignerNotSet(msg.sender);
         }
-        _rotateAssaySigner(a, address(0), graceWindow);
+        _rotateAssaySigner(a, address(0));
     }
 
-    function _rotateAssaySigner(AssayProvider storage a, address signer, uint graceWindow) private {
+    function _rotateAssaySigner(AssayProvider storage a, address signer) private {
         address old = a.signer;
-        uint deadline = 0;
         if (old != address(0)) {
-            if (graceWindow > 0) {
-                deadline = block.timestamp + graceWindow; // graceWindow <= 7 days: fits uint64
-                a.prevSigner = old;
-                a.prevSignerDeadline = uint64(deadline);
-            } else {
-                a.prevSigner = address(0);
-                a.prevSignerDeadline = 0;
-            }
+            a.prevSigner = old;
+            a.prevSignerDeadline = uint64(block.timestamp + SIGNER_GRACE);
         }
-        if (old == address(0)) {
-            // Re-entering after a clear: the clear's grace (if still running) is
-            // left alone so its in-flight vouchers keep clearing; graceWindow is
-            // not used. The event carries the surviving deadline.
-            deadline = a.prevSignerDeadline;
-        }
+        // old == 0 is a re-entry after a clear: the clear's grace (if still running)
+        // is left alone so its in-flight vouchers keep clearing. The event carries
+        // the deadline in force either way (0 on a first registration).
         a.signer = signer;
-        emit AssaySignerUpdated(msg.sender, old, signer, deadline);
+        emit AssaySignerUpdated(msg.sender, old, signer, a.prevSignerDeadline);
     }
 
-    /// @notice Allow or revoke a payee address for the calling provider's pool.
-    ///         claim() pays only listed nodes (the signer's own cut is governed
-    ///         by the cap instead), so a signer cannot route the pool to an
-    ///         address the provider never approved.
-    function setAssayNode(address node, bool allowed) external {
+    /// @notice Add a payee address to the calling provider's pool. claim() pays
+    ///         only listed nodes (the signer's own cut is governed by the cap
+    ///         instead), so a signer cannot route the pool to an address the
+    ///         provider never approved. Listing is permanent: a listed address is
+    ///         still paid only against a signer's voucher, and being unable to
+    ///         de-list means the provider cannot void a node's vouchers.
+    function allowAssayNode(address node) external {
         if (node == address(0)) {
             revert InvalidAddress(node);
         }
-        _getInferenceServingStorage().assayNode[msg.sender][node] = allowed;
-        emit AssayNodeUpdated(msg.sender, node, allowed);
+        _getInferenceServingStorage().assayNode[msg.sender][node] = true;
+        emit AssayNodeAllowed(msg.sender, node);
     }
 
-    /// @notice After leaving assay mode and once the grace window has passed,
-    ///         the provider takes back whatever is left in its pool (fees no
-    ///         voucher ever attributed, or vouchers nobody redeemed in time).
-    function withdrawAssayPool() external nonReentrant {
+    /// @notice Return what is left in a provider's pool to that provider, once it
+    ///         has left assay mode and SIGNER_GRACE has passed. Owner-only: the
+    ///         remainder is fees no voucher attributed or vouchers nobody redeemed,
+    ///         i.e. node earnings the assay can no longer pay out (lost ledger,
+    ///         retired verifier). The owner confirms that off-chain before releasing
+    ///         it; the funds can only go to the provider.
+    function withdrawAssayPool(address provider) external onlyOwner nonReentrant {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        AssayProvider storage a = $.assay[msg.sender];
+        AssayProvider storage a = $.assay[provider];
         if (a.signer != address(0) || block.timestamp <= a.prevSignerDeadline) {
-            revert AssayPoolLocked(msg.sender, a.prevSignerDeadline);
+            revert AssayPoolLocked(provider, a.prevSignerDeadline);
         }
         uint amount = a.pool;
         if (amount == 0) {
-            revert AssayPoolEmpty(msg.sender);
+            revert AssayPoolEmpty(provider);
         }
         a.pool = 0;
         a.deposited -= amount; // withdrawn money never backs the cut cap again
@@ -735,8 +750,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (a.verifierPaid > cap) {
             a.verifierPaid = cap;
         }
-        emit AssayPoolWithdrawn(msg.sender, amount);
-        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        emit AssayPoolWithdrawn(provider, amount);
+        (bool success, ) = payable(provider).call{value: amount}("");
         if (!success) {
             revert TransferFailed();
         }
@@ -858,6 +873,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function assayWithdrawnOf(address provider, address node) external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.assayWithdrawn[provider][node];
+    }
+
+    function isAssaySignerApproved(address signer) external view returns (bool) {
+        return _getInferenceServingStorage().assaySignerApproved[signer];
     }
 
     function isAssayNode(address provider, address node) external view returns (bool) {
