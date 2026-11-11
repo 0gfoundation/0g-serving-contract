@@ -46,7 +46,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         mapping(address => mapping(address => uint)) assayWithdrawn; // provider => node => cumulative withdrawn
         uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
         mapping(address => mapping(address => bool)) assayNode; // provider => payee allowed to claim
-        mapping(address => bool) assaySignerApproved; // owner-approved voucher signers
     }
 
     /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
@@ -150,7 +149,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AssayPoolFunded(address indexed provider, uint amount, uint poolBalance);
     event AssayPoolWithdrawn(address indexed provider, uint amount);
     event AssayNodeAllowed(address indexed provider, address indexed node);
-    event AssaySignerApprovalUpdated(address indexed signer, bool approved);
     event PayoutClaimed(address indexed provider, address indexed node, uint cumulative, uint64 epoch, uint owed);
 
     // Custom errors
@@ -172,7 +170,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error NothingToClaim(uint256 cumulative, uint256 withdrawn);
     error InsufficientAssayPool(uint256 owed, uint256 pool);
     error VerifierCutExceedsCap(uint256 cumulative, uint256 cap);
-    error AssaySignerNotApproved(address signer);
     error AssayNodeNotAllowed(address provider, address node);
     error AssayPoolLocked(address provider, uint256 until);
     error AssayPoolEmpty(address provider);
@@ -642,60 +639,48 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
     // === SPML assay payout ===
 
-    /// @notice Approve or revoke an address as an assay voucher signer. Providers can
-    ///         only register approved signers: whether a key really is the assay
-    ///         verifier's (derived inside its attested TEE) cannot be checked on-chain,
-    ///         so the owner vouches for it. Revoking stops the address from being
-    ///         registered again; it does not unseat a signer a provider already uses.
-    function setAssaySignerApproval(address signer, bool approved) external onlyOwner {
-        if (signer == address(0)) {
-            revert InvalidAddress(signer);
-        }
-        _getInferenceServingStorage().assaySignerApproved[signer] = approved;
-        emit AssaySignerApprovalUpdated(signer, approved);
-    }
-
-    /// @notice Register or rotate the assay voucher signer for the calling provider.
-    ///         A non-zero signer switches the provider's settlements into assay-pool
-    ///         mode: settled funds accumulate in the pool and GPUs withdraw them via
+    /// @notice Register or rotate a provider's assay voucher signer. A non-zero
+    ///         signer switches the provider's settlements into assay-pool mode:
+    ///         settled funds accumulate in the pool and GPUs withdraw them via
     ///         claim() with an EIP-712 PayoutVoucher signed by this signer.
     ///         On rotation the previous signer's in-flight vouchers stay claimable
     ///         for SIGNER_GRACE.
-    /// @dev Trust model: the pool is controlled by whoever signs vouchers, and the
-    ///      provider picks that signer among the owner-approved ones. Nodes are
-    ///      protected from the provider by the approval and by SIGNER_GRACE (a fixed
-    ///      notice period), not unconditionally.
-    /// @param signer The assay verifier's secp256k1 address (owner-approved, never zero)
-    function setAssaySigner(address signer) external {
+    /// @dev Trust model: the pool is controlled by whoever signs vouchers. Whether a
+    ///      key really is the assay verifier's (derived inside its attested TEE)
+    ///      cannot be checked on-chain, so only the owner names the signer, takes a
+    ///      provider out of assay mode, and releases a pool. A provider key (a hot
+    ///      key in the broker) can do none of these; it can only list payees.
+    /// @param provider The provider whose settlements the signer pays out
+    /// @param signer The assay verifier's secp256k1 address (never zero)
+    function setAssaySigner(address provider, address signer) external onlyOwner {
+        if (provider == address(0)) {
+            revert InvalidAddress(provider);
+        }
         if (signer == address(0)) {
             revert InvalidAddress(signer);
         }
-        InferenceServingStorage storage $ = _getInferenceServingStorage();
-        if (!$.assaySignerApproved[signer]) {
-            revert AssaySignerNotApproved(signer);
-        }
-        AssayProvider storage a = $.assay[msg.sender];
+        AssayProvider storage a = _getInferenceServingStorage().assay[provider];
         if (a.signer == signer) {
             // Re-setting the current signer is a no-op: it must not restart or cut
             // short a running grace window (prevSigner's in-flight vouchers).
             return;
         }
-        _rotateAssaySigner(a, signer);
+        _rotateAssaySigner(provider, a, signer);
     }
 
-    /// @notice Leave assay mode: settlements go back to the provider wallet from
-    ///         the next round. The current signer's in-flight vouchers stay
-    ///         claimable for SIGNER_GRACE; after that the owner can return what is
-    ///         left in the pool (withdrawAssayPool).
-    function clearAssaySigner() external {
-        AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+    /// @notice Take a provider out of assay mode: settlements go back to the
+    ///         provider wallet from the next round. The current signer's in-flight
+    ///         vouchers stay claimable for SIGNER_GRACE; after that the owner can
+    ///         return what is left in the pool (withdrawAssayPool).
+    function clearAssaySigner(address provider) external onlyOwner {
+        AssayProvider storage a = _getInferenceServingStorage().assay[provider];
         if (a.signer == address(0)) {
-            revert AssaySignerNotSet(msg.sender);
+            revert AssaySignerNotSet(provider);
         }
-        _rotateAssaySigner(a, address(0));
+        _rotateAssaySigner(provider, a, address(0));
     }
 
-    function _rotateAssaySigner(AssayProvider storage a, address signer) private {
+    function _rotateAssaySigner(address provider, AssayProvider storage a, address signer) private {
         address old = a.signer;
         if (old != address(0)) {
             a.prevSigner = old;
@@ -705,15 +690,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // is left alone so its in-flight vouchers keep clearing. The event carries
         // the deadline in force either way (0 on a first registration).
         a.signer = signer;
-        emit AssaySignerUpdated(msg.sender, old, signer, a.prevSignerDeadline);
+        emit AssaySignerUpdated(provider, old, signer, a.prevSignerDeadline);
     }
 
     /// @notice Add a payee address to the calling provider's pool. claim() pays
     ///         only listed nodes (the signer's own cut is governed by the cap
-    ///         instead), so a signer cannot route the pool to an address the
-    ///         provider never approved. Listing is permanent: a listed address is
-    ///         still paid only against a signer's voucher, and being unable to
-    ///         de-list means the provider cannot void a node's vouchers.
+    ///         instead). Listing is permanent: being unable to de-list means the
+    ///         provider cannot void a node's vouchers.
+    /// @dev The broker lists a payee by itself the first time the assay reports
+    ///      it, so the list is not an independent check on the signer: it only
+    ///      records which addresses this provider has been asked to pay. A listed
+    ///      address is still paid only against a signer's voucher.
     function allowAssayNode(address node) external {
         if (node == address(0)) {
             revert InvalidAddress(node);
@@ -873,10 +860,6 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function assayWithdrawnOf(address provider, address node) external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.assayWithdrawn[provider][node];
-    }
-
-    function isAssaySignerApproved(address signer) external view returns (bool) {
-        return _getInferenceServingStorage().assaySignerApproved[signer];
     }
 
     function isAssayNode(address provider, address node) external view returns (bool) {
