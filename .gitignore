@@ -19,3 +19,5 @@ _bmad
 .claude
 
 .env.testnet
+deployments/localhost/
+gas-report.txt
