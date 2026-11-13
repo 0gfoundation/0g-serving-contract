@@ -46,6 +46,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         mapping(address => mapping(address => uint)) assayWithdrawn; // provider => node => cumulative withdrawn
         uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
         mapping(address => mapping(address => bool)) assayNode; // provider => payee allowed to claim
+        mapping(address => uint) assayEra; // provider => pool withdrawals so far
+        // provider => signer => era it was first set in, plus one (0 = never set, max = revoked)
+        mapping(address => mapping(address => uint)) assaySignerEra;
     }
 
     /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
@@ -145,6 +148,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         address indexed newSigner,
         uint graceDeadline
     );
+    event AssaySignerRevoked(address indexed provider, address indexed signer, address indexed prevSigner);
     event AssayVerifierCutCapUpdated(uint capBps);
     event AssayPoolFunded(address indexed provider, uint amount, uint poolBalance);
     event AssayPoolWithdrawn(address indexed provider, uint amount);
@@ -173,6 +177,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error AssayNodeNotAllowed(address provider, address node);
     error AssayPoolLocked(address provider, uint256 until);
     error AssayPoolEmpty(address provider);
+    error AssaySignerRetired(address provider, address signer);
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -650,6 +655,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///      cannot be checked on-chain, so only the owner names the signer, takes a
     ///      provider out of assay mode, and releases a pool. A provider key (a hot
     ///      key in the broker) can do none of these; it can only list payees.
+    ///      A signer that was in use before a pool withdrawal, or that was revoked,
+    ///      cannot be set again (AssaySignerRetired): the vouchers it already signed
+    ///      would otherwise draw on deposits made after the withdrawal.
     /// @param provider The provider whose settlements the signer pays out
     /// @param signer The assay verifier's secp256k1 address (never zero)
     function setAssaySigner(address provider, address signer) external onlyOwner {
@@ -659,13 +667,68 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (signer == address(0)) {
             revert InvalidAddress(signer);
         }
-        AssayProvider storage a = _getInferenceServingStorage().assay[provider];
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        AssayProvider storage a = $.assay[provider];
+        // Before the no-op below on purpose: re-setting the current signer records
+        // its era if it has none (a signer set before eras existed), so a later
+        // withdrawal retires it like any other.
+        _admitAssaySigner($, provider, signer);
         if (a.signer == signer) {
-            // Re-setting the current signer is a no-op: it must not restart or cut
-            // short a running grace window (prevSigner's in-flight vouchers).
+            // Re-setting the current signer is otherwise a no-op: it must not restart
+            // or cut short a running grace window (prevSigner's in-flight vouchers).
             return;
         }
         _rotateAssaySigner(provider, a, signer);
+    }
+
+    /// @notice Emergency stop for a leaked or misbehaving signer: the current signer
+    ///         and the rotated-out one stop being honored in this block, with no
+    ///         grace, and neither can be set for this provider again.
+    /// @dev Vouchers they signed and nodes have not redeemed stop working; the
+    ///      replacement signer re-issues them (vouchers are cumulative, so nothing
+    ///      is lost while the assay's ledger is intact). With no replacement the
+    ///      provider leaves assay mode and the pool stays locked for SIGNER_GRACE
+    ///      as on a clear, so a revoke cannot be used as an exit without notice.
+    /// @param replacement The new signer, or zero to leave assay mode
+    function revokeAssaySigner(address provider, address replacement) external onlyOwner {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        AssayProvider storage a = $.assay[provider];
+        address old = a.signer;
+        address prev = a.prevSigner;
+        if (old == address(0) && prev == address(0)) {
+            revert AssaySignerNotSet(provider);
+        }
+        mapping(address => uint) storage eras = $.assaySignerEra[provider];
+        if (old != address(0)) {
+            eras[old] = type(uint).max;
+        }
+        if (prev != address(0)) {
+            eras[prev] = type(uint).max;
+        }
+        a.prevSigner = address(0);
+        if (replacement != address(0)) {
+            _admitAssaySigner($, provider, replacement);
+            a.prevSignerDeadline = 0;
+        } else if (old != address(0)) {
+            // Leaving assay mode now: start the pool lock. Already out (old == 0):
+            // the lock started by the clear keeps its deadline.
+            a.prevSignerDeadline = uint64(block.timestamp + SIGNER_GRACE);
+        }
+        a.signer = replacement;
+        emit AssaySignerRevoked(provider, old, prev);
+        emit AssaySignerUpdated(provider, old, replacement, 0); // 0: no grace for the old signer
+    }
+
+    /// @dev Record the era a signer is first set in; refuse one from an earlier era
+    ///      (in use before a pool withdrawal) or a revoked one.
+    function _admitAssaySigner(InferenceServingStorage storage $, address provider, address signer) private {
+        uint era = $.assayEra[provider] + 1;
+        uint seen = $.assaySignerEra[provider][signer];
+        if (seen == 0) {
+            $.assaySignerEra[provider][signer] = era;
+        } else if (seen != era) {
+            revert AssaySignerRetired(provider, signer);
+        }
     }
 
     /// @notice Take a provider out of assay mode: settlements go back to the
@@ -726,6 +789,10 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert AssayPoolEmpty(provider);
         }
         a.pool = 0;
+        // Unredeemed vouchers were just paid back to the provider: retire every
+        // signer used so far, so re-entry cannot make them claimable against
+        // deposits that belong to other nodes.
+        $.assayEra[provider]++;
         a.deposited -= amount; // withdrawn money never backs the cut cap again
         // ...and the cut already taken against it is forgiven to the same degree,
         // or the verifier's next cumulative cut voucher would revert until new
@@ -860,6 +927,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function assayWithdrawnOf(address provider, address node) external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.assayWithdrawn[provider][node];
+    }
+
+    /// @notice True if setAssaySigner would refuse this signer for this provider.
+    function isAssaySignerRetired(address provider, address signer) external view returns (bool) {
+        InferenceServingStorage storage $ = _getInferenceServingStorage();
+        uint seen = $.assaySignerEra[provider][signer];
+        return seen != 0 && seen != $.assayEra[provider] + 1;
     }
 
     function isAssayNode(address provider, address node) external view returns (bool) {
