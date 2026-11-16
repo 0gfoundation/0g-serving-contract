@@ -49,6 +49,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         mapping(address => uint) assayEra; // provider => pool withdrawals so far
         // provider => signer => era it was first set in, plus one (0 = never set, max = revoked)
         mapping(address => mapping(address => uint)) assaySignerEra;
+        mapping(address => bool) assayOptIn; // provider => agreed to assay mode (optInAssay; never unset)
     }
 
     /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
@@ -153,6 +154,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     event AssayPoolFunded(address indexed provider, uint amount, uint poolBalance);
     event AssayPoolWithdrawn(address indexed provider, uint amount);
     event AssayNodeAllowed(address indexed provider, address indexed node);
+    event AssayOptedIn(address indexed provider);
     event PayoutClaimed(address indexed provider, address indexed node, uint cumulative, uint64 epoch, uint owed);
 
     // Custom errors
@@ -178,6 +180,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error AssayPoolLocked(address provider, uint256 until);
     error AssayPoolEmpty(address provider);
     error AssaySignerRetired(address provider, address signer);
+    error AssayNotOptedIn(address provider);
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -654,10 +657,14 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///      key really is the assay verifier's (derived inside its attested TEE)
     ///      cannot be checked on-chain, so only the owner names the signer, takes a
     ///      provider out of assay mode, and releases a pool. A provider key (a hot
-    ///      key in the broker) can do none of these; it can only list payees.
+    ///      key in the broker) can do none of these; it can only agree to enter
+    ///      assay mode (optInAssay) and list payees.
     ///      A signer that was in use before a pool withdrawal, or that was revoked,
     ///      cannot be set again (AssaySignerRetired): the vouchers it already signed
     ///      would otherwise draw on deposits made after the withdrawal.
+    ///      Consent: the owner can take a provider into assay mode only after that
+    ///      provider called optInAssay() (AssayNotOptedIn otherwise). Rotating the
+    ///      signer of a provider already in assay mode needs nothing from it.
     /// @param provider The provider whose settlements the signer pays out
     /// @param signer The assay verifier's secp256k1 address (never zero, never the provider itself)
     function setAssaySigner(address provider, address signer) external onlyOwner {
@@ -689,6 +696,9 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///      is lost while the assay's ledger is intact). With no replacement the
     ///      provider leaves assay mode and the pool stays locked for SIGNER_GRACE
     ///      as on a clear, so a revoke cannot be used as an exit without notice.
+    ///      A replacement for a provider that is already out of assay mode (cleared,
+    ///      old signer still in its grace) is an entry: it needs the provider's
+    ///      opt-in like setAssaySigner (AssayNotOptedIn); zero always works.
     /// @param replacement The new signer (never the provider itself), or zero to leave assay mode
     function revokeAssaySigner(address provider, address replacement) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
@@ -730,6 +740,11 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         if (signer == provider) {
             revert InvalidAddress(signer);
         }
+        // Entering assay mode (no current signer) needs the provider's opt-in; a
+        // rotation does not, so the provider's hot key cannot hold up a key change.
+        if ($.assay[provider].signer == address(0) && !$.assayOptIn[provider]) {
+            revert AssayNotOptedIn(provider);
+        }
         uint era = $.assayEra[provider] + 1;
         uint seen = $.assaySignerEra[provider][signer];
         if (seen == 0) {
@@ -737,6 +752,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         } else if (seen != era) {
             revert AssaySignerRetired(provider, signer);
         }
+    }
+
+    /// @notice The calling provider agrees to be put in assay mode, where its settled
+    ///         fees go to a pool paid out by the assay's vouchers instead of to its
+    ///         wallet. Without this the owner cannot take it into assay mode.
+    /// @dev Consent to enter only, and permanent: the provider key is a hot key in
+    ///      the broker, so it cannot withdraw the consent, choose the signer or
+    ///      leave assay mode (those would let its holder redirect or drain the pool).
+    ///      After a clear the owner can re-enter the provider without a second opt-in.
+    function optInAssay() external {
+        _getInferenceServingStorage().assayOptIn[msg.sender] = true;
+        emit AssayOptedIn(msg.sender);
     }
 
     /// @notice Take a provider out of assay mode: settlements go back to the
@@ -935,6 +962,11 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     function assayWithdrawnOf(address provider, address node) external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         return $.assayWithdrawn[provider][node];
+    }
+
+    /// @notice True if the provider called optInAssay().
+    function isAssayOptedIn(address provider) external view returns (bool) {
+        return _getInferenceServingStorage().assayOptIn[provider];
     }
 
     /// @notice True if setAssaySigner would refuse this signer for this provider as retired

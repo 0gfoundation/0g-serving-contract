@@ -128,6 +128,7 @@ describe("Assay Payout", () => {
         await serving.connect(owner).acknowledgeTEESigner(provider1Address, true);
 
         // Assay mode on for provider1; nodeA / nodeB are its listed payees
+        await serving.connect(provider1).optInAssay();
         await serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address);
         await serving.connect(provider1).allowAssayNode(nodeAAddress);
         await serving.connect(provider1).allowAssayNode(nodeBAddress);
@@ -335,6 +336,7 @@ describe("Assay Payout", () => {
             // The attacker runs a second provider registered with the SAME assay signer and an
             // empty pool. Before the voucher bound the provider, provider1's voucher was a valid
             // claim against the attacker's pool too (and vice versa).
+            await serving.connect(attacker).optInAssay();
             await serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address);
             const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n); // bound to provider1
             await expect(
@@ -925,6 +927,85 @@ describe("Assay Payout", () => {
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, held)
             ).to.changeEtherBalance(nodeA, 300n);
+        });
+    });
+
+    describe("Provider consent", () => {
+        // `attacker` stands in for a second provider that never asked for assay mode
+        it("C1: the owner cannot take a provider into assay mode without its opt-in", async () => {
+            expect(await serving.isAssayOptedIn(attacker.address)).to.be.false;
+            await expect(serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address))
+                .to.be.revertedWithCustomError(serving, "AssayNotOptedIn")
+                .withArgs(attacker.address);
+            // nobody opts in for someone else: the owner's call records the owner
+            await serving.connect(owner).optInAssay();
+            await expect(
+                serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address)
+            ).to.be.revertedWithCustomError(serving, "AssayNotOptedIn");
+
+            await expect(serving.connect(attacker).optInAssay())
+                .to.emit(serving, "AssayOptedIn")
+                .withArgs(attacker.address);
+            expect(await serving.isAssayOptedIn(attacker.address)).to.be.true;
+            await serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address);
+            expect((await serving.getAssayPayoutInfo(attacker.address)).signer).to.equal(assayWallet.address);
+        });
+
+        it("C2: the opt-in is permanent: rotation, exit and re-entry need no second one", async () => {
+            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            await serving.connect(owner).clearAssaySigner(provider1Address);
+            expect(await serving.isAssayOptedIn(provider1Address)).to.be.true;
+            const third = new ethers.Wallet("0x" + "33".repeat(32));
+            await serving.connect(owner).setAssaySigner(provider1Address, third.address);
+            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(third.address);
+        });
+
+        // A provider that entered assay mode before optInAssay existed (the state an in-place
+        // upgrade leaves behind): signer set, flag unset. No call can produce it any more, so
+        // the flag is cleared in storage; the helper checks through the view that it hit it.
+        async function forgetOptIn(provider: string) {
+            const base = 0xdfd123095cdedb1cecbc229b30f7cf8745fb3d3951645ac4a8fa4c0895f89500n;
+            const target = await serving.getAddress();
+            const coder = ethers.AbiCoder.defaultAbiCoder();
+            for (let i = 0n; i < 64n; i++) {
+                const slot = ethers.toQuantity(
+                    ethers.keccak256(coder.encode(["address", "uint256"], [provider, base + i]))
+                );
+                if (BigInt(await ethers.provider.getStorage(target, slot)) !== 1n) continue;
+                await ethers.provider.send("hardhat_setStorageAt", [target, slot, ethers.ZeroHash]);
+                if (!(await serving.isAssayOptedIn(provider))) return;
+                await ethers.provider.send("hardhat_setStorageAt", [target, slot, ethers.zeroPadValue("0x01", 32)]);
+            }
+            throw new Error("assayOptIn slot not found");
+        }
+
+        it("C3: a provider already in assay mode needs no opt-in to be rotated or revoked to a new signer", async () => {
+            await forgetOptIn(provider1Address);
+            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
+            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address); // re-set no-op
+            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            const third = new ethers.Wallet("0x" + "33".repeat(32));
+            await serving.connect(owner).revokeAssaySigner(provider1Address, third.address);
+            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(third.address);
+        });
+
+        it("C4: once such a provider is cleared, neither set nor a revoke replacement re-enters it without its opt-in", async () => {
+            await forgetOptIn(provider1Address);
+            await serving.connect(owner).clearAssaySigner(provider1Address);
+            await expect(serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address))
+                .to.be.revertedWithCustomError(serving, "AssayNotOptedIn")
+                .withArgs(provider1Address);
+            // old signer still in its grace: a replacement would be an entry
+            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, assayWallet2.address))
+                .to.be.revertedWithCustomError(serving, "AssayNotOptedIn")
+                .withArgs(provider1Address);
+            // the emergency stop itself never needs the provider
+            await serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress);
+            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.true;
+
+            await serving.connect(provider1).optInAssay();
+            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet2.address);
         });
     });
 
