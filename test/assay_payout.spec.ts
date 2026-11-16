@@ -489,6 +489,18 @@ describe("Assay Payout", () => {
             ).to.be.revertedWithCustomError(serving, "InvalidAddress");
         });
 
+        it("A3b: the provider's own address is rejected as its signer, on set and as a revoke replacement", async () => {
+            await expect(serving.connect(owner).setAssaySigner(provider1Address, provider1Address))
+                .to.be.revertedWithCustomError(serving, "InvalidAddress")
+                .withArgs(provider1Address);
+            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, provider1Address))
+                .to.be.revertedWithCustomError(serving, "InvalidAddress")
+                .withArgs(provider1Address);
+            // the failed revoke changed nothing: same signer, not retired
+            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
+            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.false;
+        });
+
         it("A4: only the owner sets or clears a signer: the provider key cannot rotate to its own key or leave assay mode", async () => {
             for (const who of [provider1, attacker]) {
                 await expect(
@@ -965,11 +977,15 @@ describe("Assay Payout", () => {
 
         it("K3: revoke without a replacement leaves assay mode and still locks the pool for the grace", async () => {
             const stolen = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress);
+            const tx = await serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress);
             const info = await serving.getAssayPayoutInfo(provider1Address);
             expect(info.signer).to.equal(ethers.ZeroAddress);
             expect(info.prevSigner).to.equal(ethers.ZeroAddress);
             expect(info.prevSignerDeadline).to.equal(BigInt(await time.latest()) + BigInt(GRACE));
+            // the event carries the pool-lock deadline, not 0
+            await expect(tx)
+                .to.emit(serving, "AssaySignerUpdated")
+                .withArgs(provider1Address, assayWallet.address, ethers.ZeroAddress, info.prevSignerDeadline);
 
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, stolen)
@@ -991,7 +1007,9 @@ describe("Assay Payout", () => {
             await serving.connect(owner).clearAssaySigner(provider1Address);
             const deadline = (await serving.getAssayPayoutInfo(provider1Address)).prevSignerDeadline;
             await time.increase(3600);
-            await serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress);
+            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress))
+                .to.emit(serving, "AssaySignerUpdated")
+                .withArgs(provider1Address, ethers.ZeroAddress, ethers.ZeroAddress, deadline);
             expect((await serving.getAssayPayoutInfo(provider1Address)).prevSignerDeadline).to.equal(deadline);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)

@@ -659,7 +659,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///      cannot be set again (AssaySignerRetired): the vouchers it already signed
     ///      would otherwise draw on deposits made after the withdrawal.
     /// @param provider The provider whose settlements the signer pays out
-    /// @param signer The assay verifier's secp256k1 address (never zero)
+    /// @param signer The assay verifier's secp256k1 address (never zero, never the provider itself)
     function setAssaySigner(address provider, address signer) external onlyOwner {
         if (provider == address(0)) {
             revert InvalidAddress(provider);
@@ -689,7 +689,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///      is lost while the assay's ledger is intact). With no replacement the
     ///      provider leaves assay mode and the pool stays locked for SIGNER_GRACE
     ///      as on a clear, so a revoke cannot be used as an exit without notice.
-    /// @param replacement The new signer, or zero to leave assay mode
+    /// @param replacement The new signer (never the provider itself), or zero to leave assay mode
     function revokeAssaySigner(address provider, address replacement) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         AssayProvider storage a = $.assay[provider];
@@ -716,12 +716,20 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         a.signer = replacement;
         emit AssaySignerRevoked(provider, old, prev);
-        emit AssaySignerUpdated(provider, old, replacement, 0); // 0: no grace for the old signer
+        // The deadline is the pool lock in force (0 with a replacement), as on a clear.
+        // It is not a grace: AssaySignerRevoked above says the old signers get none.
+        emit AssaySignerUpdated(provider, old, replacement, a.prevSignerDeadline);
     }
 
     /// @dev Record the era a signer is first set in; refuse one from an earlier era
-    ///      (in use before a pool withdrawal) or a revoked one.
+    ///      (in use before a pool withdrawal) or a revoked one. Also refuse the
+    ///      provider's own address: that is the broker's hot key. This catches the
+    ///      owner's slip only; any other key the provider holds passes, and telling
+    ///      those apart is the owner's off-chain attestation check.
     function _admitAssaySigner(InferenceServingStorage storage $, address provider, address signer) private {
+        if (signer == provider) {
+            revert InvalidAddress(signer);
+        }
         uint era = $.assayEra[provider] + 1;
         uint seen = $.assaySignerEra[provider][signer];
         if (seen == 0) {
@@ -929,7 +937,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         return $.assayWithdrawn[provider][node];
     }
 
-    /// @notice True if setAssaySigner would refuse this signer for this provider.
+    /// @notice True if setAssaySigner would refuse this signer for this provider as retired
+    ///         (AssaySignerRetired). The provider's own address is refused too, but is not retired.
     function isAssaySignerRetired(address provider, address signer) external view returns (bool) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
         uint seen = $.assaySignerEra[provider][signer];
