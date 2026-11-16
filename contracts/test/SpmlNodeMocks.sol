@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.22;
 
-interface IAssayClaim {
+interface ISpmlClaim {
     function claim(
         address provider,
         address node,
@@ -11,7 +11,7 @@ interface IAssayClaim {
     ) external;
 }
 
-/// @dev Test-only payout targets for the assay claim adversarial suite.
+/// @dev Test-only payout targets for the spml claim adversarial suite.
 
 /// Rejects every transfer — a claim paying this node must revert as a whole.
 contract RevertingReceiver {
@@ -23,7 +23,7 @@ contract RevertingReceiver {
 /// On receiving its payout, immediately re-enters claim() with the stored
 /// voucher; the reentrant call must find withdrawn already advanced.
 contract ReentrantClaimer {
-    IAssayClaim public serving;
+    ISpmlClaim public serving;
     address public provider;
     uint256 public cumulative;
     uint64 public epoch;
@@ -32,7 +32,7 @@ contract ReentrantClaimer {
     bool public reentrySucceeded;
 
     function arm(
-        IAssayClaim _serving,
+        ISpmlClaim _serving,
         address _provider,
         uint256 _cumulative,
         uint64 _epoch,

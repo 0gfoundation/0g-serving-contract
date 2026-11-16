@@ -41,22 +41,22 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         AccountLibrary.AccountMap accountMap;
         ServiceLibrary.ServiceMap serviceMap;
         mapping(address => uint) providerStake; // Service provider stake amounts
-        // --- SPML assay payout (appended fields; never reorder) ---
-        mapping(address => AssayProvider) assay; // provider => pool + signer state
-        mapping(address => mapping(address => uint)) assayWithdrawn; // provider => node => cumulative withdrawn
-        uint assayVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
-        mapping(address => mapping(address => bool)) assayNode; // provider => payee allowed to claim
-        mapping(address => uint) assayEra; // provider => pool withdrawals so far
+        // --- SPML spml payout (appended fields; never reorder) ---
+        mapping(address => SpmlProvider) spml; // provider => pool + signer state
+        mapping(address => mapping(address => uint)) spmlWithdrawn; // provider => node => cumulative withdrawn
+        uint spmlVerifierCutCapBps; // cap on the verifier's own cut, in basis points of deposited
+        mapping(address => mapping(address => bool)) spmlNode; // provider => payee allowed to claim
+        mapping(address => uint) spmlEra; // provider => pool withdrawals so far
         // provider => signer => era it was first set in, plus one (0 = never set, max = revoked)
-        mapping(address => mapping(address => uint)) assaySignerEra;
-        mapping(address => bool) assayOptIn; // provider => agreed to assay mode (optInAssay; never unset)
+        mapping(address => mapping(address => uint)) spmlSignerEra;
+        mapping(address => bool) spmlOptIn; // provider => agreed to spml mode (optInSpml; never unset)
     }
 
-    /// @dev Per-provider assay payout state, packed: signer + prevSignerDeadline share a
+    /// @dev Per-provider spml payout state, packed: signer + prevSignerDeadline share a
     ///      slot, prevSigner has one, then pool / deposited / verifierPaid. The amount ever
     ///      claimed is not stored: it is always deposited - pool.
-    struct AssayProvider {
-        address signer; // voucher signer (assay verifier key); non-zero = assay mode
+    struct SpmlProvider {
+        address signer; // voucher signer (spml verifier key); non-zero = spml mode
         uint64 prevSignerDeadline; // grace deadline for prevSigner (0 = none)
         address prevSigner; // rotated-out signer, valid until prevSignerDeadline
         uint pool; // claimable balance
@@ -90,8 +90,8 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     string private constant DOMAIN_NAME = "0G Inference Serving";
     string private constant DOMAIN_VERSION = "1";
 
-    // Assay payout: how long a rotated-out or cleared signer's vouchers stay claimable,
-    // and how long after leaving assay mode the pool stays locked. Fixed, so the
+    // Spml payout: how long a rotated-out or cleared signer's vouchers stay claimable,
+    // and how long after leaving spml mode the pool stays locked. Fixed, so the
     // provider cannot shorten the notice its nodes get.
     uint public constant SIGNER_GRACE = 7 days;
     uint private constant BPS_DENOMINATOR = 10000;
@@ -142,19 +142,19 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         address indexed provider,
         uint256 refundedAmount
     );
-    // Assay payout events
-    event AssaySignerUpdated(
+    // Spml payout events
+    event SpmlSignerUpdated(
         address indexed provider,
         address indexed oldSigner,
         address indexed newSigner,
         uint graceDeadline
     );
-    event AssaySignerRevoked(address indexed provider, address indexed signer, address indexed prevSigner);
-    event AssayVerifierCutCapUpdated(uint capBps);
-    event AssayPoolFunded(address indexed provider, uint amount, uint poolBalance);
-    event AssayPoolWithdrawn(address indexed provider, uint amount);
-    event AssayNodeAllowed(address indexed provider, address indexed node);
-    event AssayOptedIn(address indexed provider);
+    event SpmlSignerRevoked(address indexed provider, address indexed signer, address indexed prevSigner);
+    event SpmlVerifierCutCapUpdated(uint capBps);
+    event SpmlPoolFunded(address indexed provider, uint amount, uint poolBalance);
+    event SpmlPoolWithdrawn(address indexed provider, uint amount);
+    event SpmlNodeAllowed(address indexed provider, address indexed node);
+    event SpmlOptedIn(address indexed provider);
     event PayoutClaimed(address indexed provider, address indexed node, uint cumulative, uint64 epoch, uint owed);
 
     // Custom errors
@@ -170,17 +170,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     error TooManySettlements(uint256 count, uint256 max);
     error ProviderCannotBeUser();
     error DirectDepositsDisabled();
-    // Assay payout errors
-    error AssaySignerNotSet(address provider);
+    // Spml payout errors
+    error SpmlSignerNotSet(address provider);
     error InvalidVoucherSignature();
     error NothingToClaim(uint256 cumulative, uint256 withdrawn);
-    error InsufficientAssayPool(uint256 owed, uint256 pool);
+    error InsufficientSpmlPool(uint256 owed, uint256 pool);
     error VerifierCutExceedsCap(uint256 cumulative, uint256 cap);
-    error AssayNodeNotAllowed(address provider, address node);
-    error AssayPoolLocked(address provider, uint256 until);
-    error AssayPoolEmpty(address provider);
-    error AssaySignerRetired(address provider, address signer);
-    error AssayNotOptedIn(address provider);
+    error SpmlNodeNotAllowed(address provider, address node);
+    error SpmlPoolLocked(address provider, uint256 until);
+    error SpmlPoolEmpty(address provider);
+    error SpmlSignerRetired(address provider, address signer);
+    error SpmlNotOptedIn(address provider);
 
     /**
      * @dev Constructor that disables initialization on the logic contract.
@@ -626,16 +626,16 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
 
         // Batch transfer all settled amounts at once.
-        // Assay mode (provider registered an assay signer): settled funds are
-        // credited to the provider's assay pool and leave via claim(), or via
-        // the owner's withdrawAssayPool() once the provider has left assay mode (design:
+        // Spml mode (provider registered an spml signer): settled funds are
+        // credited to the provider's spml pool and leave via claim(), or via
+        // the owner's withdrawSpmlPool() once the provider has left spml mode (design:
         // the contract is the only place funds move).
         if (totalTransferAmount > 0) {
-            AssayProvider storage a = _getInferenceServingStorage().assay[msg.sender];
+            SpmlProvider storage a = _getInferenceServingStorage().spml[msg.sender];
             if (a.signer != address(0)) {
                 a.pool += totalTransferAmount;
                 a.deposited += totalTransferAmount;
-                emit AssayPoolFunded(msg.sender, totalTransferAmount, a.pool);
+                emit SpmlPoolFunded(msg.sender, totalTransferAmount, a.pool);
             } else {
                 (bool success, ) = payable(msg.sender).call{value: totalTransferAmount}("");
                 if (!success) {
@@ -645,29 +645,29 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
-    // === SPML assay payout ===
+    // === SPML spml payout ===
 
-    /// @notice Register or rotate a provider's assay voucher signer. A non-zero
-    ///         signer switches the provider's settlements into assay-pool mode:
+    /// @notice Register or rotate a provider's spml voucher signer. A non-zero
+    ///         signer switches the provider's settlements into spml-pool mode:
     ///         settled funds accumulate in the pool and GPUs withdraw them via
     ///         claim() with an EIP-712 PayoutVoucher signed by this signer.
     ///         On rotation the previous signer's in-flight vouchers stay claimable
     ///         for SIGNER_GRACE.
     /// @dev Trust model: the pool is controlled by whoever signs vouchers. Whether a
-    ///      key really is the assay verifier's (derived inside its attested TEE)
+    ///      key really is the spml verifier's (derived inside its attested TEE)
     ///      cannot be checked on-chain, so only the owner names the signer, takes a
-    ///      provider out of assay mode, and releases a pool. A provider key (a hot
+    ///      provider out of spml mode, and releases a pool. A provider key (a hot
     ///      key in the broker) can do none of these; it can only agree to enter
-    ///      assay mode (optInAssay) and list payees.
+    ///      spml mode (optInSpml) and list payees.
     ///      A signer that was in use before a pool withdrawal, or that was revoked,
-    ///      cannot be set again (AssaySignerRetired): the vouchers it already signed
+    ///      cannot be set again (SpmlSignerRetired): the vouchers it already signed
     ///      would otherwise draw on deposits made after the withdrawal.
-    ///      Consent: the owner can take a provider into assay mode only after that
-    ///      provider called optInAssay() (AssayNotOptedIn otherwise). Rotating the
-    ///      signer of a provider already in assay mode needs nothing from it.
+    ///      Consent: the owner can take a provider into spml mode only after that
+    ///      provider called optInSpml() (SpmlNotOptedIn otherwise). Rotating the
+    ///      signer of a provider already in spml mode needs nothing from it.
     /// @param provider The provider whose settlements the signer pays out
-    /// @param signer The assay verifier's secp256k1 address (never zero, never the provider itself)
-    function setAssaySigner(address provider, address signer) external onlyOwner {
+    /// @param signer The spml verifier's secp256k1 address (never zero, never the provider itself)
+    function setSpmlSigner(address provider, address signer) external onlyOwner {
         if (provider == address(0)) {
             revert InvalidAddress(provider);
         }
@@ -675,17 +675,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert InvalidAddress(signer);
         }
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        AssayProvider storage a = $.assay[provider];
+        SpmlProvider storage a = $.spml[provider];
         // Before the no-op below on purpose: re-setting the current signer records
         // its era if it has none (a signer set before eras existed), so a later
         // withdrawal retires it like any other.
-        _admitAssaySigner($, provider, signer);
+        _admitSpmlSigner($, provider, signer);
         if (a.signer == signer) {
             // Re-setting the current signer is otherwise a no-op: it must not restart
             // or cut short a running grace window (prevSigner's in-flight vouchers).
             return;
         }
-        _rotateAssaySigner(provider, a, signer);
+        _rotateSpmlSigner(provider, a, signer);
     }
 
     /// @notice Emergency stop for a leaked or misbehaving signer: the current signer
@@ -693,22 +693,22 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///         grace, and neither can be set for this provider again.
     /// @dev Vouchers they signed and nodes have not redeemed stop working; the
     ///      replacement signer re-issues them (vouchers are cumulative, so nothing
-    ///      is lost while the assay's ledger is intact). With no replacement the
-    ///      provider leaves assay mode and the pool stays locked for SIGNER_GRACE
+    ///      is lost while the spml's ledger is intact). With no replacement the
+    ///      provider leaves spml mode and the pool stays locked for SIGNER_GRACE
     ///      as on a clear, so a revoke cannot be used as an exit without notice.
-    ///      A replacement for a provider that is already out of assay mode (cleared,
+    ///      A replacement for a provider that is already out of spml mode (cleared,
     ///      old signer still in its grace) is an entry: it needs the provider's
-    ///      opt-in like setAssaySigner (AssayNotOptedIn); zero always works.
-    /// @param replacement The new signer (never the provider itself), or zero to leave assay mode
-    function revokeAssaySigner(address provider, address replacement) external onlyOwner {
+    ///      opt-in like setSpmlSigner (SpmlNotOptedIn); zero always works.
+    /// @param replacement The new signer (never the provider itself), or zero to leave spml mode
+    function revokeSpmlSigner(address provider, address replacement) external onlyOwner {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        AssayProvider storage a = $.assay[provider];
+        SpmlProvider storage a = $.spml[provider];
         address old = a.signer;
         address prev = a.prevSigner;
         if (old == address(0) && prev == address(0)) {
-            revert AssaySignerNotSet(provider);
+            revert SpmlSignerNotSet(provider);
         }
-        mapping(address => uint) storage eras = $.assaySignerEra[provider];
+        mapping(address => uint) storage eras = $.spmlSignerEra[provider];
         if (old != address(0)) {
             eras[old] = type(uint).max;
         }
@@ -717,18 +717,18 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
         a.prevSigner = address(0);
         if (replacement != address(0)) {
-            _admitAssaySigner($, provider, replacement);
+            _admitSpmlSigner($, provider, replacement);
             a.prevSignerDeadline = 0;
         } else if (old != address(0)) {
-            // Leaving assay mode now: start the pool lock. Already out (old == 0):
+            // Leaving spml mode now: start the pool lock. Already out (old == 0):
             // the lock started by the clear keeps its deadline.
             a.prevSignerDeadline = uint64(block.timestamp + SIGNER_GRACE);
         }
         a.signer = replacement;
-        emit AssaySignerRevoked(provider, old, prev);
+        emit SpmlSignerRevoked(provider, old, prev);
         // The deadline is the pool lock in force (0 with a replacement), as on a clear.
-        // It is not a grace: AssaySignerRevoked above says the old signers get none.
-        emit AssaySignerUpdated(provider, old, replacement, a.prevSignerDeadline);
+        // It is not a grace: SpmlSignerRevoked above says the old signers get none.
+        emit SpmlSignerUpdated(provider, old, replacement, a.prevSignerDeadline);
     }
 
     /// @dev Record the era a signer is first set in; refuse one from an earlier era
@@ -736,49 +736,49 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     ///      provider's own address: that is the broker's hot key. This catches the
     ///      owner's slip only; any other key the provider holds passes, and telling
     ///      those apart is the owner's off-chain attestation check.
-    function _admitAssaySigner(InferenceServingStorage storage $, address provider, address signer) private {
+    function _admitSpmlSigner(InferenceServingStorage storage $, address provider, address signer) private {
         if (signer == provider) {
             revert InvalidAddress(signer);
         }
-        // Entering assay mode (no current signer) needs the provider's opt-in; a
+        // Entering spml mode (no current signer) needs the provider's opt-in; a
         // rotation does not, so the provider's hot key cannot hold up a key change.
-        if ($.assay[provider].signer == address(0) && !$.assayOptIn[provider]) {
-            revert AssayNotOptedIn(provider);
+        if ($.spml[provider].signer == address(0) && !$.spmlOptIn[provider]) {
+            revert SpmlNotOptedIn(provider);
         }
-        uint era = $.assayEra[provider] + 1;
-        uint seen = $.assaySignerEra[provider][signer];
+        uint era = $.spmlEra[provider] + 1;
+        uint seen = $.spmlSignerEra[provider][signer];
         if (seen == 0) {
-            $.assaySignerEra[provider][signer] = era;
+            $.spmlSignerEra[provider][signer] = era;
         } else if (seen != era) {
-            revert AssaySignerRetired(provider, signer);
+            revert SpmlSignerRetired(provider, signer);
         }
     }
 
-    /// @notice The calling provider agrees to be put in assay mode, where its settled
-    ///         fees go to a pool paid out by the assay's vouchers instead of to its
-    ///         wallet. Without this the owner cannot take it into assay mode.
+    /// @notice The calling provider agrees to be put in spml mode, where its settled
+    ///         fees go to a pool paid out by the spml's vouchers instead of to its
+    ///         wallet. Without this the owner cannot take it into spml mode.
     /// @dev Consent to enter only, and permanent: the provider key is a hot key in
     ///      the broker, so it cannot withdraw the consent, choose the signer or
-    ///      leave assay mode (those would let its holder redirect or drain the pool).
+    ///      leave spml mode (those would let its holder redirect or drain the pool).
     ///      After a clear the owner can re-enter the provider without a second opt-in.
-    function optInAssay() external {
-        _getInferenceServingStorage().assayOptIn[msg.sender] = true;
-        emit AssayOptedIn(msg.sender);
+    function optInSpml() external {
+        _getInferenceServingStorage().spmlOptIn[msg.sender] = true;
+        emit SpmlOptedIn(msg.sender);
     }
 
-    /// @notice Take a provider out of assay mode: settlements go back to the
+    /// @notice Take a provider out of spml mode: settlements go back to the
     ///         provider wallet from the next round. The current signer's in-flight
     ///         vouchers stay claimable for SIGNER_GRACE; after that the owner can
-    ///         return what is left in the pool (withdrawAssayPool).
-    function clearAssaySigner(address provider) external onlyOwner {
-        AssayProvider storage a = _getInferenceServingStorage().assay[provider];
+    ///         return what is left in the pool (withdrawSpmlPool).
+    function clearSpmlSigner(address provider) external onlyOwner {
+        SpmlProvider storage a = _getInferenceServingStorage().spml[provider];
         if (a.signer == address(0)) {
-            revert AssaySignerNotSet(provider);
+            revert SpmlSignerNotSet(provider);
         }
-        _rotateAssaySigner(provider, a, address(0));
+        _rotateSpmlSigner(provider, a, address(0));
     }
 
-    function _rotateAssaySigner(address provider, AssayProvider storage a, address signer) private {
+    function _rotateSpmlSigner(address provider, SpmlProvider storage a, address signer) private {
         address old = a.signer;
         if (old != address(0)) {
             a.prevSigner = old;
@@ -788,46 +788,46 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // is left alone so its in-flight vouchers keep clearing. The event carries
         // the deadline in force either way (0 on a first registration).
         a.signer = signer;
-        emit AssaySignerUpdated(provider, old, signer, a.prevSignerDeadline);
+        emit SpmlSignerUpdated(provider, old, signer, a.prevSignerDeadline);
     }
 
     /// @notice Add a payee address to the calling provider's pool. claim() pays
     ///         only listed nodes (the signer's own cut is governed by the cap
     ///         instead). Listing is permanent: being unable to de-list means the
     ///         provider cannot void a node's vouchers.
-    /// @dev The broker lists a payee by itself the first time the assay reports
+    /// @dev The broker lists a payee by itself the first time the spml reports
     ///      it, so the list is not an independent check on the signer: it only
     ///      records which addresses this provider has been asked to pay. A listed
     ///      address is still paid only against a signer's voucher.
-    function allowAssayNode(address node) external {
+    function allowSpmlNode(address node) external {
         if (node == address(0)) {
             revert InvalidAddress(node);
         }
-        _getInferenceServingStorage().assayNode[msg.sender][node] = true;
-        emit AssayNodeAllowed(msg.sender, node);
+        _getInferenceServingStorage().spmlNode[msg.sender][node] = true;
+        emit SpmlNodeAllowed(msg.sender, node);
     }
 
     /// @notice Return what is left in a provider's pool to that provider, once it
-    ///         has left assay mode and SIGNER_GRACE has passed. Owner-only: the
+    ///         has left spml mode and SIGNER_GRACE has passed. Owner-only: the
     ///         remainder is fees no voucher attributed or vouchers nobody redeemed,
-    ///         i.e. node earnings the assay can no longer pay out (lost ledger,
+    ///         i.e. node earnings the spml can no longer pay out (lost ledger,
     ///         retired verifier). The owner confirms that off-chain before releasing
     ///         it; the funds can only go to the provider.
-    function withdrawAssayPool(address provider) external onlyOwner nonReentrant {
+    function withdrawSpmlPool(address provider) external onlyOwner nonReentrant {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        AssayProvider storage a = $.assay[provider];
+        SpmlProvider storage a = $.spml[provider];
         if (a.signer != address(0) || block.timestamp <= a.prevSignerDeadline) {
-            revert AssayPoolLocked(provider, a.prevSignerDeadline);
+            revert SpmlPoolLocked(provider, a.prevSignerDeadline);
         }
         uint amount = a.pool;
         if (amount == 0) {
-            revert AssayPoolEmpty(provider);
+            revert SpmlPoolEmpty(provider);
         }
         a.pool = 0;
         // Unredeemed vouchers were just paid back to the provider: retire every
         // signer used so far, so re-entry cannot make them claimable against
         // deposits that belong to other nodes.
-        $.assayEra[provider]++;
+        $.spmlEra[provider]++;
         a.deposited -= amount; // withdrawn money never backs the cut cap again
         // ...and the cut already taken against it is forgiven to the same degree,
         // or the verifier's next cumulative cut voucher would revert until new
@@ -835,11 +835,11 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // Measured at the current bps: an owner that lowers the cap before a
         // withdrawal and raises it after hands the verifier that much fresh
         // allowance (owner-trusted, same trust as setting the cap at all).
-        uint cap = (a.deposited * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
+        uint cap = (a.deposited * $.spmlVerifierCutCapBps) / BPS_DENOMINATOR;
         if (a.verifierPaid > cap) {
             a.verifierPaid = cap;
         }
-        emit AssayPoolWithdrawn(provider, amount);
+        emit SpmlPoolWithdrawn(provider, amount);
         (bool success, ) = payable(provider).call{value: amount}("");
         if (!success) {
             revert TransferFailed();
@@ -847,17 +847,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
     }
 
     /// @notice Cap (in basis points of the provider's cumulative pool deposits) on the
-    ///         cumulative amount the assay signer may claim for itself as its cut.
-    function setAssayVerifierCutCap(uint capBps) external onlyOwner {
+    ///         cumulative amount the spml signer may claim for itself as its cut.
+    function setSpmlVerifierCutCap(uint capBps) external onlyOwner {
         if (capBps > BPS_DENOMINATOR) {
             revert LimitTooLarge(capBps, BPS_DENOMINATOR);
         }
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        $.assayVerifierCutCapBps = capBps;
-        emit AssayVerifierCutCapUpdated(capBps);
+        $.spmlVerifierCutCapBps = capBps;
+        emit SpmlVerifierCutCapUpdated(capBps);
     }
 
-    /// @notice Redeem a cumulative PayoutVoucher signed by the provider's assay signer.
+    /// @notice Redeem a cumulative PayoutVoucher signed by the provider's spml signer.
     ///         Anyone may submit; funds always go to the voucher's node address.
     ///         Replays are inert: cumulative must strictly exceed what the node has
     ///         already withdrawn, and only the delta is paid. The voucher binds the
@@ -874,13 +874,13 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             revert InvalidAddress(node);
         }
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        AssayProvider storage a = $.assay[provider];
+        SpmlProvider storage a = $.spml[provider];
         address signer = a.signer;
         // A cleared or rotated-out signer keeps its in-flight vouchers claimable
         // until the grace deadline so rotation / exit cannot strand funds (A2).
         address prev = block.timestamp <= a.prevSignerDeadline ? a.prevSigner : address(0);
         if (signer == address(0) && prev == address(0)) {
-            revert AssaySignerNotSet(provider);
+            revert SpmlSignerNotSet(provider);
         }
 
         bytes32 structHash = keccak256(abi.encode(PAYOUT_VOUCHER_TYPEHASH, provider, node, cumulative, epoch));
@@ -897,17 +897,17 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // zero signer / prev never matches. prevSigner is read ungated on purpose:
         // an expired old signer's address stays cap-bounded rather than listable.
         bool verifierNode = node == signer || node == a.prevSigner;
-        if (!verifierNode && !$.assayNode[provider][node]) {
-            revert AssayNodeNotAllowed(provider, node);
+        if (!verifierNode && !$.spmlNode[provider][node]) {
+            revert SpmlNodeNotAllowed(provider, node);
         }
 
-        uint256 withdrawnSoFar = $.assayWithdrawn[provider][node];
+        uint256 withdrawnSoFar = $.spmlWithdrawn[provider][node];
         if (cumulative <= withdrawnSoFar) {
             revert NothingToClaim(cumulative, withdrawnSoFar);
         }
         uint256 owed = cumulative - withdrawnSoFar;
         if (owed > a.pool) {
-            revert InsufficientAssayPool(owed, a.pool);
+            revert InsufficientSpmlPool(owed, a.pool);
         }
 
         // The verifier claiming its own cut is bounded by the on-chain cap, counted
@@ -915,7 +915,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         // fresh allowance. Everything else in the voucher is already vouched for by
         // its signature.
         if (verifierNode) {
-            uint256 cap = (a.deposited * $.assayVerifierCutCapBps) / BPS_DENOMINATOR;
+            uint256 cap = (a.deposited * $.spmlVerifierCutCapBps) / BPS_DENOMINATOR;
             uint256 paid = a.verifierPaid + owed;
             if (paid > cap) {
                 revert VerifierCutExceedsCap(paid, cap);
@@ -925,7 +925,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
 
         // Effects before interaction (CEI): a reentrant claim sees withdrawn
         // already advanced and reverts with NothingToClaim.
-        $.assayWithdrawn[provider][node] = cumulative;
+        $.spmlWithdrawn[provider][node] = cumulative;
         a.pool -= owed;
         emit PayoutClaimed(provider, node, cumulative, epoch, owed);
 
@@ -935,7 +935,7 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
         }
     }
 
-    function getAssayPayoutInfo(
+    function getSpmlPayoutInfo(
         address provider
     )
         external
@@ -949,41 +949,41 @@ contract InferenceServing is Ownable, Initializable, ReentrancyGuard, IServing, 
             uint totalPaid
         )
     {
-        AssayProvider storage a = _getInferenceServingStorage().assay[provider];
+        SpmlProvider storage a = _getInferenceServingStorage().spml[provider];
         return (a.signer, a.prevSigner, a.prevSignerDeadline, a.pool, a.deposited, a.deposited - a.pool);
     }
 
     /// @notice Cumulative amount the verifier has claimed as its own cut from this
     ///         provider's pool, across signer rotations (what the cut cap is checked against).
-    function assayVerifierPaidOf(address provider) external view returns (uint) {
-        return _getInferenceServingStorage().assay[provider].verifierPaid;
+    function spmlVerifierPaidOf(address provider) external view returns (uint) {
+        return _getInferenceServingStorage().spml[provider].verifierPaid;
     }
 
-    function assayWithdrawnOf(address provider, address node) external view returns (uint) {
+    function spmlWithdrawnOf(address provider, address node) external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        return $.assayWithdrawn[provider][node];
+        return $.spmlWithdrawn[provider][node];
     }
 
-    /// @notice True if the provider called optInAssay().
-    function isAssayOptedIn(address provider) external view returns (bool) {
-        return _getInferenceServingStorage().assayOptIn[provider];
+    /// @notice True if the provider called optInSpml().
+    function isSpmlOptedIn(address provider) external view returns (bool) {
+        return _getInferenceServingStorage().spmlOptIn[provider];
     }
 
-    /// @notice True if setAssaySigner would refuse this signer for this provider as retired
-    ///         (AssaySignerRetired). The provider's own address is refused too, but is not retired.
-    function isAssaySignerRetired(address provider, address signer) external view returns (bool) {
+    /// @notice True if setSpmlSigner would refuse this signer for this provider as retired
+    ///         (SpmlSignerRetired). The provider's own address is refused too, but is not retired.
+    function isSpmlSignerRetired(address provider, address signer) external view returns (bool) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        uint seen = $.assaySignerEra[provider][signer];
-        return seen != 0 && seen != $.assayEra[provider] + 1;
+        uint seen = $.spmlSignerEra[provider][signer];
+        return seen != 0 && seen != $.spmlEra[provider] + 1;
     }
 
-    function isAssayNode(address provider, address node) external view returns (bool) {
-        return _getInferenceServingStorage().assayNode[provider][node];
+    function isSpmlNode(address provider, address node) external view returns (bool) {
+        return _getInferenceServingStorage().spmlNode[provider][node];
     }
 
-    function assayVerifierCutCapBps() external view returns (uint) {
+    function spmlVerifierCutCapBps() external view returns (uint) {
         InferenceServingStorage storage $ = _getInferenceServingStorage();
-        return $.assayVerifierCutCapBps;
+        return $.spmlVerifierCutCapBps;
     }
 
     // View function to preview settlement without state changes

@@ -6,9 +6,9 @@ import { beforeEach } from "mocha";
 import { InferenceServing as Serving, LedgerManager } from "../typechain-types";
 import { TEESettlementDataStruct } from "../typechain-types/contracts/inference/InferenceServing";
 
-// SPML assay payout — adversarial suite from docs/spml-payout-adversarial-testplan.md.
+// SPML spml payout — adversarial suite from docs/spml-payout-adversarial-testplan.md.
 // Catalog row IDs (R1, S5, A2, ...) reference that document.
-describe("Assay Payout", () => {
+describe("Spml Payout", () => {
     let serving: Serving;
     let ledger: LedgerManager;
     let owner: HardhatEthersSigner, user1: HardhatEthersSigner, provider1: HardhatEthersSigner;
@@ -19,12 +19,12 @@ describe("Assay Payout", () => {
     const teePrivateKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
     const teeWallet = new ethers.Wallet(teePrivateKey);
 
-    const assayPrivateKey = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba";
-    const assayWallet = new ethers.Wallet(assayPrivateKey);
+    const spmlPrivateKey = "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba";
+    const spmlWallet = new ethers.Wallet(spmlPrivateKey);
 
     const rogueWallet = ethers.Wallet.createRandom();
     // a fresh verifier key: what a provider re-enters with after a pool withdrawal
-    const assayWallet2 = new ethers.Wallet("0x" + "22".repeat(32));
+    const spmlWallet2 = new ethers.Wallet("0x" + "22".repeat(32));
 
     const additionalData = "test";
     const GRACE = 7 * 24 * 60 * 60; // InferenceServing.SIGNER_GRACE
@@ -80,14 +80,14 @@ describe("Assay Payout", () => {
         return { user, provider: provider1Address, totalFee, requestsHash, nonce, signature };
     }
 
-    // Settle `amount` of the owner's account into provider1's assay pool.
+    // Settle `amount` of the owner's account into provider1's spml pool.
     async function settleToPool(amount: bigint) {
         const settlement = await makeSettlement(ownerAddress, amount);
         await serving.connect(provider1).settleFeesWithTEE([settlement]);
     }
 
     async function poolOf(provider: string): Promise<bigint> {
-        const info = await serving.getAssayPayoutInfo(provider);
+        const info = await serving.getSpmlPayoutInfo(provider);
         return info.pool;
     }
 
@@ -127,26 +127,26 @@ describe("Assay Payout", () => {
         await serving.connect(owner).acknowledgeTEESignerByOwner(provider1Address);
         await serving.connect(owner).acknowledgeTEESigner(provider1Address, true);
 
-        // Assay mode on for provider1; nodeA / nodeB are its listed payees
-        await serving.connect(provider1).optInAssay();
-        await serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address);
-        await serving.connect(provider1).allowAssayNode(nodeAAddress);
-        await serving.connect(provider1).allowAssayNode(nodeBAddress);
+        // Spml mode on for provider1; nodeA / nodeB are its listed payees
+        await serving.connect(provider1).optInSpml();
+        await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet.address);
+        await serving.connect(provider1).allowSpmlNode(nodeAAddress);
+        await serving.connect(provider1).allowSpmlNode(nodeBAddress);
     });
 
     describe("Pool funding", () => {
-        it("settlement credits the assay pool instead of the provider wallet", async () => {
+        it("settlement credits the spml pool instead of the provider wallet", async () => {
             const providerBalanceBefore = await ethers.provider.getBalance(provider1Address);
             const settlement = await makeSettlement(ownerAddress, 1000n);
             await expect(serving.connect(provider1).settleFeesWithTEE([settlement]))
-                .to.emit(serving, "AssayPoolFunded")
+                .to.emit(serving, "SpmlPoolFunded")
                 .withArgs(provider1Address, 1000n, 1000n);
             expect(await poolOf(provider1Address)).to.equal(1000n);
             // provider paid gas but received no settlement funds
             expect(await ethers.provider.getBalance(provider1Address)).to.be.lessThan(providerBalanceBefore);
         });
 
-        it("a provider without an assay signer still gets paid directly (legacy mode)", async () => {
+        it("a provider without an spml signer still gets paid directly (legacy mode)", async () => {
             const legacyProvider = nodeB; // reuse a signer as a second provider
             await ledger.transferFund(await legacyProvider.getAddress(), "inference-test", ethers.parseEther("1"));
             await serving.connect(legacyProvider).addOrUpdateService(
@@ -196,15 +196,15 @@ describe("Assay Payout", () => {
         });
 
         it("pays the delta and advances withdrawn", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             const claimTx = serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig);
             await expect(claimTx)
                 .to.emit(serving, "PayoutClaimed")
                 .withArgs(provider1Address, nodeAAddress, 300n, 1n, 300n);
             await expect(claimTx).to.changeEtherBalance(nodeA, 300n);
-            expect(await serving.assayWithdrawnOf(provider1Address, nodeAAddress)).to.equal(300n);
+            expect(await serving.spmlWithdrawnOf(provider1Address, nodeAAddress)).to.equal(300n);
 
-            const sig2 = await signVoucher(assayWallet, nodeAAddress, 500n, 2n);
+            const sig2 = await signVoucher(spmlWallet, nodeAAddress, 500n, 2n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 500n, 2n, sig2)
             ).to.changeEtherBalance(nodeA, 200n);
@@ -212,11 +212,11 @@ describe("Assay Payout", () => {
         });
 
         it("INV1 conservation: deposited == pool + totalPaid after a claim sequence", async () => {
-            const sigA = await signVoucher(assayWallet, nodeAAddress, 400n, 1n);
+            const sigA = await signVoucher(spmlWallet, nodeAAddress, 400n, 1n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 400n, 1n, sigA);
-            const sigB = await signVoucher(assayWallet, nodeBAddress, 250n, 1n);
+            const sigB = await signVoucher(spmlWallet, nodeBAddress, 250n, 1n);
             await serving.connect(nodeB).claim(provider1Address, nodeBAddress, 250n, 1n, sigB);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.deposited).to.equal(info.pool + info.totalPaid);
             expect(info.totalPaid).to.equal(650n);
         });
@@ -228,7 +228,7 @@ describe("Assay Payout", () => {
         });
 
         it("R1: the same voucher pays once, then reverts", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig)
@@ -236,19 +236,19 @@ describe("Assay Payout", () => {
         });
 
         it("R2/R3: out-of-order lower cumulative reverts; net stays at the highest", async () => {
-            const sig20 = await signVoucher(assayWallet, nodeAAddress, 20n, 2n);
+            const sig20 = await signVoucher(spmlWallet, nodeAAddress, 20n, 2n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 20n, 2n, sig20);
-            const sig10 = await signVoucher(assayWallet, nodeAAddress, 10n, 1n);
+            const sig10 = await signVoucher(spmlWallet, nodeAAddress, 10n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 10n, 1n, sig10)
             ).to.be.revertedWithCustomError(serving, "NothingToClaim");
-            expect(await serving.assayWithdrawnOf(provider1Address, nodeAAddress)).to.equal(20n);
+            expect(await serving.spmlWithdrawnOf(provider1Address, nodeAAddress)).to.equal(20n);
         });
 
         it("R5: same cumulative under a different epoch is not a fresh claim", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig);
-            const sigEpoch2 = await signVoucher(assayWallet, nodeAAddress, 300n, 2n);
+            const sigEpoch2 = await signVoucher(spmlWallet, nodeAAddress, 300n, 2n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 2n, sigEpoch2)
             ).to.be.revertedWithCustomError(serving, "NothingToClaim");
@@ -261,7 +261,7 @@ describe("Assay Payout", () => {
         });
 
         it("S1: a malleated high-s signature is rejected", async () => {
-            const sig = ethers.Signature.from(await signVoucher(assayWallet, nodeAAddress, 300n, 1n));
+            const sig = ethers.Signature.from(await signVoucher(spmlWallet, nodeAAddress, 300n, 1n));
             const N = BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
             const sPrime = ethers.toBeHex(N - BigInt(sig.s), 32);
             const vPrime = sig.v === 27 ? 28 : 27;
@@ -272,7 +272,7 @@ describe("Assay Payout", () => {
         });
 
         it("S2: an out-of-range recovery id is rejected", async () => {
-            const sig = ethers.Signature.from(await signVoucher(assayWallet, nodeAAddress, 300n, 1n));
+            const sig = ethers.Signature.from(await signVoucher(spmlWallet, nodeAAddress, 300n, 1n));
             const badV = ethers.concat([sig.r, sig.s, new Uint8Array([29])]);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, badV)
@@ -295,13 +295,13 @@ describe("Assay Payout", () => {
         });
 
         it("S5: mutating cumulative under an old signature recovers the wrong address", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 999n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
         });
 
-        it("S6: a voucher from a non-assay key is rejected", async () => {
+        it("S6: a voucher from a non-spml key is rejected", async () => {
             const sig = await signVoucher(rogueWallet as unknown as ethers.Wallet, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig)
@@ -321,7 +321,7 @@ describe("Assay Payout", () => {
                 chainId: (await ethers.provider.getNetwork()).chainId,
                 verifyingContract: await ledger.getAddress(), // any other address
             };
-            const sig = await assayWallet.signTypedData(foreignDomain, voucherTypes, {
+            const sig = await spmlWallet.signTypedData(foreignDomain, voucherTypes, {
                 provider: provider1Address,
                 node: nodeAAddress,
                 cumulative: 300n,
@@ -333,28 +333,28 @@ describe("Assay Payout", () => {
         });
 
         it("X4: a voucher for provider1 cannot be redeemed from another provider that shares the signer", async () => {
-            // The attacker runs a second provider registered with the SAME assay signer and an
+            // The attacker runs a second provider registered with the SAME spml signer and an
             // empty pool. Before the voucher bound the provider, provider1's voucher was a valid
             // claim against the attacker's pool too (and vice versa).
-            await serving.connect(attacker).optInAssay();
-            await serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address);
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n); // bound to provider1
+            await serving.connect(attacker).optInSpml();
+            await serving.connect(owner).setSpmlSigner(attacker.address, spmlWallet.address);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n); // bound to provider1
             await expect(
                 serving.connect(nodeA).claim(attacker.address, nodeAAddress, 300n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
             expect(await poolOf(provider1Address)).to.equal(1000n);
 
             // Bound to the attacker's provider (which lists nodeA) it is well-formed — and finds no pool behind it.
-            await serving.connect(attacker).allowAssayNode(nodeAAddress);
-            const sigB = await signVoucher(assayWallet, nodeAAddress, 300n, 1n, attacker.address);
+            await serving.connect(attacker).allowSpmlNode(nodeAAddress);
+            const sigB = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n, attacker.address);
             await expect(
                 serving.connect(nodeA).claim(attacker.address, nodeAAddress, 300n, 1n, sigB)
-            ).to.be.revertedWithCustomError(serving, "InsufficientAssayPool");
-            expect(await serving.assayWithdrawnOf(provider1Address, nodeAAddress)).to.equal(0n);
+            ).to.be.revertedWithCustomError(serving, "InsufficientSpmlPool");
+            expect(await serving.spmlWithdrawnOf(provider1Address, nodeAAddress)).to.equal(0n);
         });
 
         it("X3: a legacy TEESettlement signature is not a voucher", async () => {
-            const sig = await assayWallet.signTypedData(
+            const sig = await spmlWallet.signTypedData(
                 await domain(),
                 {
                     TEESettlement: [
@@ -385,21 +385,21 @@ describe("Assay Payout", () => {
         });
 
         it("P1: anyone may submit a voucher, but funds always reach the voucher's node", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, nodeAAddress, 300n, 1n, sig)
             ).to.changeEtherBalances([nodeA, attacker], [300n, 0n]);
         });
 
         it("P2: claiming with a node different from the signed one reverts", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, await attacker.getAddress(), 300n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
         });
 
         it("P3: node == address(0) is rejected", async () => {
-            const sig = await signVoucher(assayWallet, ethers.ZeroAddress, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, ethers.ZeroAddress, 300n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, ethers.ZeroAddress, 300n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "InvalidAddress");
@@ -408,15 +408,15 @@ describe("Assay Payout", () => {
         it("P4: a node that reverts on receive only breaks its own claim", async () => {
             const reverting = await (await ethers.getContractFactory("RevertingReceiver")).deploy();
             const revertingAddr = await reverting.getAddress();
-            await serving.connect(provider1).allowAssayNode(revertingAddr);
-            const sig = await signVoucher(assayWallet, revertingAddr, 300n, 1n);
+            await serving.connect(provider1).allowSpmlNode(revertingAddr);
+            const sig = await signVoucher(spmlWallet, revertingAddr, 300n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, revertingAddr, 300n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "TransferFailed");
             // nothing persisted, pool intact, another node can still claim
-            expect(await serving.assayWithdrawnOf(provider1Address, revertingAddr)).to.equal(0n);
+            expect(await serving.spmlWithdrawnOf(provider1Address, revertingAddr)).to.equal(0n);
             expect(await poolOf(provider1Address)).to.equal(1000n);
-            const sigA = await signVoucher(assayWallet, nodeAAddress, 100n, 1n);
+            const sigA = await signVoucher(spmlWallet, nodeAAddress, 100n, 1n);
             await expect(serving.connect(nodeA).claim(provider1Address, nodeAAddress, 100n, 1n, sigA)).not.to.be
                 .reverted;
         });
@@ -425,10 +425,10 @@ describe("Assay Payout", () => {
     describe("Solvency (5.5)", () => {
         it("V1/V3: a cumulative beyond the pool reverts at the solvency check", async () => {
             await settleToPool(100n);
-            const sig = await signVoucher(assayWallet, nodeAAddress, 500n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 500n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 500n, 1n, sig)
-            ).to.be.revertedWithCustomError(serving, "InsufficientAssayPool");
+            ).to.be.revertedWithCustomError(serving, "InsufficientSpmlPool");
             // top the pool up; the same voucher then pays in full
             await settleToPool(400n);
             await expect(
@@ -437,10 +437,10 @@ describe("Assay Payout", () => {
         });
 
         it("claims from an unfunded provider revert", async () => {
-            const sig = await signVoucher(assayWallet, nodeAAddress, 1n, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 1n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 1n, 1n, sig)
-            ).to.be.revertedWithCustomError(serving, "InsufficientAssayPool");
+            ).to.be.revertedWithCustomError(serving, "InsufficientSpmlPool");
         });
     });
 
@@ -452,8 +452,8 @@ describe("Assay Payout", () => {
         it("RE1: reentering claim from the receive hook pays exactly once", async () => {
             const claimer = await (await ethers.getContractFactory("ReentrantClaimer")).deploy();
             const claimerAddr = await claimer.getAddress();
-            await serving.connect(provider1).allowAssayNode(claimerAddr);
-            const sig = await signVoucher(assayWallet, claimerAddr, 300n, 1n);
+            await serving.connect(provider1).allowSpmlNode(claimerAddr);
+            const sig = await signVoucher(spmlWallet, claimerAddr, 300n, 1n);
             await claimer.arm(await serving.getAddress(), provider1Address, 300n, 1n, sig);
             await claimer.doClaim();
             expect(await claimer.reentered()).to.be.true;
@@ -465,10 +465,10 @@ describe("Assay Payout", () => {
         it("RE3: a gas-heavy receive hook only affects its own claim", async () => {
             const heavy = await (await ethers.getContractFactory("GasHeavyReceiver")).deploy();
             const heavyAddr = await heavy.getAddress();
-            await serving.connect(provider1).allowAssayNode(heavyAddr);
-            const sig = await signVoucher(assayWallet, heavyAddr, 100n, 1n);
+            await serving.connect(provider1).allowSpmlNode(heavyAddr);
+            const sig = await signVoucher(spmlWallet, heavyAddr, 100n, 1n);
             await serving.connect(attacker).claim(provider1Address, heavyAddr, 100n, 1n, sig);
-            const sigA = await signVoucher(assayWallet, nodeAAddress, 100n, 1n);
+            const sigA = await signVoucher(spmlWallet, nodeAAddress, 100n, 1n);
             await expect(serving.connect(nodeA).claim(provider1Address, nodeAAddress, 100n, 1n, sigA)).not.to.be
                 .reverted;
         });
@@ -480,48 +480,48 @@ describe("Assay Payout", () => {
         });
 
         it("A1: only the contract owner sets the verifier cut cap", async () => {
-            await expect(serving.connect(attacker).setAssayVerifierCutCap(1000)).to.be.revertedWith(
+            await expect(serving.connect(attacker).setSpmlVerifierCutCap(1000)).to.be.revertedWith(
                 "Ownable: caller is not the owner"
             );
         });
 
-        it("A3: assaySigner = address(0) is rejected", async () => {
+        it("A3: spmlSigner = address(0) is rejected", async () => {
             await expect(
-                serving.connect(owner).setAssaySigner(provider1Address, ethers.ZeroAddress)
+                serving.connect(owner).setSpmlSigner(provider1Address, ethers.ZeroAddress)
             ).to.be.revertedWithCustomError(serving, "InvalidAddress");
         });
 
         it("A3b: the provider's own address is rejected as its signer, on set and as a revoke replacement", async () => {
-            await expect(serving.connect(owner).setAssaySigner(provider1Address, provider1Address))
+            await expect(serving.connect(owner).setSpmlSigner(provider1Address, provider1Address))
                 .to.be.revertedWithCustomError(serving, "InvalidAddress")
                 .withArgs(provider1Address);
-            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, provider1Address))
+            await expect(serving.connect(owner).revokeSpmlSigner(provider1Address, provider1Address))
                 .to.be.revertedWithCustomError(serving, "InvalidAddress")
                 .withArgs(provider1Address);
             // the failed revoke changed nothing: same signer, not retired
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
-            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.false;
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(spmlWallet.address);
+            expect(await serving.isSpmlSignerRetired(provider1Address, spmlWallet.address)).to.be.false;
         });
 
-        it("A4: only the owner sets or clears a signer: the provider key cannot rotate to its own key or leave assay mode", async () => {
+        it("A4: only the owner sets or clears a signer: the provider key cannot rotate to its own key or leave spml mode", async () => {
             for (const who of [provider1, attacker]) {
                 await expect(
-                    serving.connect(who).setAssaySigner(provider1Address, rogueWallet.address)
+                    serving.connect(who).setSpmlSigner(provider1Address, rogueWallet.address)
                 ).to.be.revertedWith("Ownable: caller is not the owner");
-                await expect(serving.connect(who).clearAssaySigner(provider1Address)).to.be.revertedWith(
+                await expect(serving.connect(who).clearSpmlSigner(provider1Address)).to.be.revertedWith(
                     "Ownable: caller is not the owner"
                 );
             }
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(spmlWallet.address);
 
-            await serving.connect(owner).setAssaySigner(provider1Address, rogueWallet.address);
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(rogueWallet.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, rogueWallet.address);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(rogueWallet.address);
         });
 
         it("A2: an in-flight voucher from the old key claims within the grace window, dies after", async () => {
-            const oldSig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const oldSig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
-            await serving.connect(owner).setAssaySigner(provider1Address, newSigner.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, newSigner.address);
 
             // within the grace window the old voucher still pays
             await expect(
@@ -529,7 +529,7 @@ describe("Assay Payout", () => {
             ).to.changeEtherBalance(nodeA, 300n);
 
             // after the deadline an old-key voucher is dead
-            const oldSig2 = await signVoucher(assayWallet, nodeAAddress, 400n, 2n);
+            const oldSig2 = await signVoucher(spmlWallet, nodeAAddress, 400n, 2n);
             await time.increase(GRACE + 1);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 400n, 2n, oldSig2)
@@ -548,9 +548,9 @@ describe("Assay Payout", () => {
         });
 
         it("A2b: the grace is fixed: a rotation cannot kill the old signer's vouchers early", async () => {
-            const oldSig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).setAssaySigner(provider1Address, rogueWallet.address);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
+            const oldSig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).setSpmlSigner(provider1Address, rogueWallet.address);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.prevSignerDeadline).to.equal(BigInt(await time.latest()) + BigInt(GRACE));
 
             await time.increase(GRACE - 60);
@@ -560,15 +560,15 @@ describe("Assay Payout", () => {
         });
 
         it("A2c: re-setting the current signer during the grace neither restarts nor cuts it", async () => {
-            const oldSig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            const oldSig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
-            await serving.connect(owner).setAssaySigner(provider1Address, newSigner.address);
-            const deadline = (await serving.getAssayPayoutInfo(provider1Address)).prevSignerDeadline;
+            await serving.connect(owner).setSpmlSigner(provider1Address, newSigner.address);
+            const deadline = (await serving.getSpmlPayoutInfo(provider1Address)).prevSignerDeadline;
             await time.increase(3600);
             // same signer again (an operator re-running its deploy step)
-            await serving.connect(owner).setAssaySigner(provider1Address, newSigner.address);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
-            expect(info.prevSigner).to.equal(assayWallet.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, newSigner.address);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
+            expect(info.prevSigner).to.equal(spmlWallet.address);
             expect(info.prevSignerDeadline).to.equal(deadline);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, oldSig)
@@ -581,21 +581,21 @@ describe("Assay Payout", () => {
             await settleToPool(1000n);
         });
 
-        it("the assay signer claiming its own cut is bounded by the cap", async () => {
-            const verifierNode = assayWallet.address;
+        it("the spml signer claiming its own cut is bounded by the cap", async () => {
+            const verifierNode = spmlWallet.address;
             // cap unset (0 bps) — any self-claim reverts
-            const sig = await signVoucher(assayWallet, verifierNode, 10n, 1n);
+            const sig = await signVoucher(spmlWallet, verifierNode, 10n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, verifierNode, 10n, 1n, sig)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
 
-            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10%
+            await serving.connect(owner).setSpmlVerifierCutCap(1000); // 10%
             // 10% of 1000 deposited = 100; 10 is fine
             await expect(
                 serving.connect(attacker).claim(provider1Address, verifierNode, 10n, 1n, sig)
-            ).to.changeEtherBalance(assayWallet.address, 10n);
+            ).to.changeEtherBalance(spmlWallet.address, 10n);
             // beyond the cap reverts
-            const sigBig = await signVoucher(assayWallet, verifierNode, 101n, 2n);
+            const sigBig = await signVoucher(spmlWallet, verifierNode, 101n, 2n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, verifierNode, 101n, 2n, sigBig)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
@@ -605,16 +605,16 @@ describe("Assay Payout", () => {
     describe("Verifier cut cap across rotation", () => {
         beforeEach(async () => {
             await settleToPool(1000n);
-            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10% of 1000 deposited = 100
+            await serving.connect(owner).setSpmlVerifierCutCap(1000); // 10% of 1000 deposited = 100
         });
 
         it("the cap is per provider, not per signer address: rotating the signer does not refill it", async () => {
-            const sig1 = await signVoucher(assayWallet, assayWallet.address, 60n, 1n);
-            await serving.connect(attacker).claim(provider1Address, assayWallet.address, 60n, 1n, sig1);
-            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(60n);
+            const sig1 = await signVoucher(spmlWallet, spmlWallet.address, 60n, 1n);
+            await serving.connect(attacker).claim(provider1Address, spmlWallet.address, 60n, 1n, sig1);
+            expect(await serving.spmlVerifierPaidOf(provider1Address)).to.equal(60n);
 
             const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
-            await serving.connect(owner).setAssaySigner(provider1Address, newSigner.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, newSigner.address);
 
             // The new signer paying itself starts from the 60 already taken: 60 more breaks the cap…
             const tooMuch = await newSigner.signTypedData(await domain(), voucherTypes, {
@@ -639,10 +639,10 @@ describe("Assay Payout", () => {
             await expect(
                 serving.connect(attacker).claim(provider1Address, newSigner.address, 40n, 2n, ok)
             ).to.changeEtherBalance(newSigner.address, 40n);
-            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(100n);
+            expect(await serving.spmlVerifierPaidOf(provider1Address)).to.equal(100n);
 
             // totalPaid is derived (deposited - pool) and conservation still holds.
-            const info = await serving.getAssayPayoutInfo(provider1Address);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.totalPaid).to.equal(100n);
             expect(info.deposited).to.equal(info.pool + info.totalPaid);
         });
@@ -655,14 +655,14 @@ describe("Assay Payout", () => {
 
         it("L1: a valid voucher for an address the provider never listed reverts; listing it pays", async () => {
             const stray = await attacker.getAddress();
-            const sig = await signVoucher(assayWallet, stray, 300n, 1n);
+            const sig = await signVoucher(spmlWallet, stray, 300n, 1n);
             await expect(serving.connect(attacker).claim(provider1Address, stray, 300n, 1n, sig))
-                .to.be.revertedWithCustomError(serving, "AssayNodeNotAllowed")
+                .to.be.revertedWithCustomError(serving, "SpmlNodeNotAllowed")
                 .withArgs(provider1Address, stray);
-            expect(await serving.isAssayNode(provider1Address, stray)).to.be.false;
+            expect(await serving.isSpmlNode(provider1Address, stray)).to.be.false;
 
-            await expect(serving.connect(provider1).allowAssayNode(stray))
-                .to.emit(serving, "AssayNodeAllowed")
+            await expect(serving.connect(provider1).allowSpmlNode(stray))
+                .to.emit(serving, "SpmlNodeAllowed")
                 .withArgs(provider1Address, stray);
             await expect(
                 serving.connect(attacker).claim(provider1Address, stray, 300n, 1n, sig)
@@ -671,11 +671,11 @@ describe("Assay Payout", () => {
 
         it("L2: a listing is permanent: the provider has no call that voids a listed node's vouchers", async () => {
             const names = serving.interface.fragments.filter((f) => f.type === "function").map((f) => f.format());
-            expect(names).to.include("allowAssayNode(address)");
-            expect(names.filter((n) => n.startsWith("setAssayNode"))).to.be.empty;
+            expect(names).to.include("allowSpmlNode(address)");
+            expect(names.filter((n) => n.startsWith("setSpmlNode"))).to.be.empty;
             // listing again changes nothing
-            await serving.connect(provider1).allowAssayNode(nodeAAddress);
-            const sig = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(provider1).allowSpmlNode(nodeAAddress);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, sig)
             ).to.changeEtherBalance(nodeA, 300n);
@@ -683,47 +683,47 @@ describe("Assay Payout", () => {
 
         it("L3: a list entry is per provider: another account listing an address does not open provider1's pool", async () => {
             const stray = await attacker.getAddress();
-            await serving.connect(attacker).allowAssayNode(stray);
-            const sig = await signVoucher(assayWallet, stray, 300n, 1n);
+            await serving.connect(attacker).allowSpmlNode(stray);
+            const sig = await signVoucher(spmlWallet, stray, 300n, 1n);
             await expect(
                 serving.connect(attacker).claim(provider1Address, stray, 300n, 1n, sig)
-            ).to.be.revertedWithCustomError(serving, "AssayNodeNotAllowed");
+            ).to.be.revertedWithCustomError(serving, "SpmlNodeNotAllowed");
         });
 
         it("L4: the signer's own address needs no listing but stays under the cut cap", async () => {
-            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10% of 1000
-            const sig = await signVoucher(assayWallet, assayWallet.address, 100n, 1n);
+            await serving.connect(owner).setSpmlVerifierCutCap(1000); // 10% of 1000
+            const sig = await signVoucher(spmlWallet, spmlWallet.address, 100n, 1n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet.address, 100n, 1n, sig)
-            ).to.changeEtherBalance(assayWallet.address, 100n);
-            const more = await signVoucher(assayWallet, assayWallet.address, 101n, 2n);
+                serving.connect(attacker).claim(provider1Address, spmlWallet.address, 100n, 1n, sig)
+            ).to.changeEtherBalance(spmlWallet.address, 100n);
+            const more = await signVoucher(spmlWallet, spmlWallet.address, 101n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet.address, 101n, 2n, more)
+                serving.connect(attacker).claim(provider1Address, spmlWallet.address, 101n, 2n, more)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
         });
 
         it("L5: node == address(0) cannot be listed", async () => {
             await expect(
-                serving.connect(provider1).allowAssayNode(ethers.ZeroAddress)
+                serving.connect(provider1).allowSpmlNode(ethers.ZeroAddress)
             ).to.be.revertedWithCustomError(serving, "InvalidAddress");
         });
     });
 
-    describe("Leaving assay mode", () => {
+    describe("Leaving spml mode", () => {
         beforeEach(async () => {
             await settleToPool(1000n);
         });
 
-        const ownerWithdraw = () => serving.connect(owner).withdrawAssayPool(provider1Address);
+        const ownerWithdraw = () => serving.connect(owner).withdrawSpmlPool(provider1Address);
 
         it("E1: clear: in-flight vouchers still pay, settlements go to the wallet, the owner returns the rest after the grace", async () => {
-            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await expect(serving.connect(owner).clearAssaySigner(provider1Address))
-                .to.emit(serving, "AssaySignerUpdated")
-                .withArgs(provider1Address, assayWallet.address, ethers.ZeroAddress, (d: bigint) => d > 0n);
-            let info = await serving.getAssayPayoutInfo(provider1Address);
+            const inFlight = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await expect(serving.connect(owner).clearSpmlSigner(provider1Address))
+                .to.emit(serving, "SpmlSignerUpdated")
+                .withArgs(provider1Address, spmlWallet.address, ethers.ZeroAddress, (d: bigint) => d > 0n);
+            let info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.signer).to.equal(ethers.ZeroAddress);
-            expect(info.prevSigner).to.equal(assayWallet.address);
+            expect(info.prevSigner).to.equal(spmlWallet.address);
             expect(info.prevSignerDeadline).to.equal(BigInt(await time.latest()) + BigInt(GRACE));
 
             // a settlement after the clear pays the wallet, not the pool
@@ -739,28 +739,28 @@ describe("Assay Payout", () => {
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
             ).to.changeEtherBalance(nodeA, 300n);
             // the pool is locked while the grace runs
-            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "AssayPoolLocked");
+            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "SpmlPoolLocked");
 
             await time.increase(GRACE + 1);
-            const late = await signVoucher(assayWallet, nodeAAddress, 400n, 2n);
+            const late = await signVoucher(spmlWallet, nodeAAddress, 400n, 2n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 400n, 2n, late)
-            ).to.be.revertedWithCustomError(serving, "AssaySignerNotSet");
-            await expect(ownerWithdraw()).to.emit(serving, "AssayPoolWithdrawn").withArgs(provider1Address, 700n);
-            info = await serving.getAssayPayoutInfo(provider1Address);
+            ).to.be.revertedWithCustomError(serving, "SpmlSignerNotSet");
+            await expect(ownerWithdraw()).to.emit(serving, "SpmlPoolWithdrawn").withArgs(provider1Address, 700n);
+            info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.pool).to.equal(0n);
             expect(info.deposited).to.equal(300n); // the 700 withdrawn no longer counts as deposited
             expect(info.totalPaid).to.equal(300n); // = what nodes claimed, withdrawals excluded
-            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "AssayPoolEmpty");
+            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "SpmlPoolEmpty");
         });
 
         it("E2: the provider cannot drain the pool: no withdrawal of its own, none by the owner inside the grace", async () => {
-            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
-            await expect(serving.connect(provider1).withdrawAssayPool(provider1Address)).to.be.revertedWith(
+            const inFlight = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
+            await expect(serving.connect(provider1).withdrawSpmlPool(provider1Address)).to.be.revertedWith(
                 "Ownable: caller is not the owner"
             );
-            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "AssayPoolLocked");
+            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "SpmlPoolLocked");
             // the node's voucher is still good near the end of the grace
             await time.increase(GRACE - 60);
             await expect(
@@ -773,157 +773,157 @@ describe("Assay Payout", () => {
         });
 
         it("E3: opting back in resumes pooling; the cut history survives, less the share forgiven by the withdrawal", async () => {
-            await serving.connect(owner).setAssayVerifierCutCap(1000);
-            const cut = await signVoucher(assayWallet, assayWallet.address, 60n, 1n);
-            await serving.connect(attacker).claim(provider1Address, assayWallet.address, 60n, 1n, cut);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
+            await serving.connect(owner).setSpmlVerifierCutCap(1000);
+            const cut = await signVoucher(spmlWallet, spmlWallet.address, 60n, 1n);
+            await serving.connect(attacker).claim(provider1Address, spmlWallet.address, 60n, 1n, cut);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
             await time.increase(GRACE + 1);
             await ownerWithdraw();
 
             // re-entry needs a fresh signer (E8); the cut history is per provider, so it carries over
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             await settleToPool(1000n);
             expect(await poolOf(provider1Address)).to.equal(1000n);
             // withdraw of 940: deposited 60, cap 6, verifierPaid clamped 60 → 6; then +1000 deposited → cap 106:
             // 100 more cut fits, 101 does not
-            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(6n);
-            const tooMuch = await signVoucher(assayWallet2, assayWallet2.address, 101n, 2n);
+            expect(await serving.spmlVerifierPaidOf(provider1Address)).to.equal(6n);
+            const tooMuch = await signVoucher(spmlWallet2, spmlWallet2.address, 101n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet2.address, 101n, 2n, tooMuch)
+                serving.connect(attacker).claim(provider1Address, spmlWallet2.address, 101n, 2n, tooMuch)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
-            const ok = await signVoucher(assayWallet2, assayWallet2.address, 100n, 2n);
+            const ok = await signVoucher(spmlWallet2, spmlWallet2.address, 100n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet2.address, 100n, 2n, ok)
-            ).to.changeEtherBalance(assayWallet2.address, 100n);
-            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(106n);
+                serving.connect(attacker).claim(provider1Address, spmlWallet2.address, 100n, 2n, ok)
+            ).to.changeEtherBalance(spmlWallet2.address, 100n);
+            expect(await serving.spmlVerifierPaidOf(provider1Address)).to.equal(106n);
         });
 
         it("E7: a withdrawal forgives the cut already taken against the withdrawn money, so the verifier's next cumulative cut clears", async () => {
-            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10%
-            const cut1 = await signVoucher(assayWallet, assayWallet.address, 100n, 1n);
-            await serving.connect(attacker).claim(provider1Address, assayWallet.address, 100n, 1n, cut1);
-            const nodeSig = await signVoucher(assayWallet, nodeAAddress, 500n, 1n);
+            await serving.connect(owner).setSpmlVerifierCutCap(1000); // 10%
+            const cut1 = await signVoucher(spmlWallet, spmlWallet.address, 100n, 1n);
+            await serving.connect(attacker).claim(provider1Address, spmlWallet.address, 100n, 1n, cut1);
+            const nodeSig = await signVoucher(spmlWallet, nodeAAddress, 500n, 1n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 500n, 1n, nodeSig);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
             await time.increase(GRACE + 1);
             await ownerWithdraw(); // 400 back; deposited 600, cap 60
-            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(60n);
+            expect(await serving.spmlVerifierPaidOf(provider1Address)).to.equal(60n);
 
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             await settleToPool(1000n); // deposited 1600, cap 160: 100 more cut fits
-            const cut2 = await signVoucher(assayWallet2, assayWallet2.address, 100n, 2n);
+            const cut2 = await signVoucher(spmlWallet2, spmlWallet2.address, 100n, 2n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet2.address, 100n, 2n, cut2)
-            ).to.changeEtherBalance(assayWallet2.address, 100n);
-            expect(await serving.assayVerifierPaidOf(provider1Address)).to.equal(160n);
-            const cut3 = await signVoucher(assayWallet2, assayWallet2.address, 101n, 3n);
+                serving.connect(attacker).claim(provider1Address, spmlWallet2.address, 100n, 2n, cut2)
+            ).to.changeEtherBalance(spmlWallet2.address, 100n);
+            expect(await serving.spmlVerifierPaidOf(provider1Address)).to.equal(160n);
+            const cut3 = await signVoucher(spmlWallet2, spmlWallet2.address, 101n, 3n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet2.address, 101n, 3n, cut3)
+                serving.connect(attacker).claim(provider1Address, spmlWallet2.address, 101n, 3n, cut3)
             ).to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap");
         });
 
-        it("E4: guards — clear without a signer, withdraw while in assay mode, withdraw by a non-owner", async () => {
-            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "AssayPoolLocked");
-            await expect(serving.connect(attacker).withdrawAssayPool(provider1Address)).to.be.revertedWith(
+        it("E4: guards — clear without a signer, withdraw while in spml mode, withdraw by a non-owner", async () => {
+            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "SpmlPoolLocked");
+            await expect(serving.connect(attacker).withdrawSpmlPool(provider1Address)).to.be.revertedWith(
                 "Ownable: caller is not the owner"
             );
-            await expect(serving.connect(owner).clearAssaySigner(attacker.address)).to.be.revertedWithCustomError(
+            await expect(serving.connect(owner).clearSpmlSigner(attacker.address)).to.be.revertedWithCustomError(
                 serving,
-                "AssaySignerNotSet"
+                "SpmlSignerNotSet"
             );
         });
 
         it("E5: re-registering a signer while the clear grace runs keeps that grace; the pool relocks", async () => {
-            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
-            const deadline = (await serving.getAssayPayoutInfo(provider1Address)).prevSignerDeadline;
+            const inFlight = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
+            const deadline = (await serving.getSpmlPayoutInfo(provider1Address)).prevSignerDeadline;
             const newSigner = new ethers.Wallet(ethers.Wallet.createRandom().privateKey);
             await time.increase(3600);
-            await serving.connect(owner).setAssaySigner(provider1Address, newSigner.address);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
-            expect(info.prevSigner).to.equal(assayWallet.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, newSigner.address);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
+            expect(info.prevSigner).to.equal(spmlWallet.address);
             expect(info.prevSignerDeadline).to.equal(deadline);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
             ).to.changeEtherBalance(nodeA, 300n);
             await time.increase(GRACE);
-            // still in assay mode: the pool stays locked past the old deadline
-            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "AssayPoolLocked");
-            const late = await signVoucher(assayWallet, nodeAAddress, 400n, 2n);
+            // still in spml mode: the pool stays locked past the old deadline
+            await expect(ownerWithdraw()).to.be.revertedWithCustomError(serving, "SpmlPoolLocked");
+            const late = await signVoucher(spmlWallet, nodeAAddress, 400n, 2n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 400n, 2n, late)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
         });
 
         it("E6: withdrawn money does not back the cut cap: after exit + re-entry the cut is a share of new deposits only", async () => {
-            await serving.connect(owner).setAssayVerifierCutCap(1000); // 10%
-            await serving.connect(owner).clearAssaySigner(provider1Address);
+            await serving.connect(owner).setSpmlVerifierCutCap(1000); // 10%
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
             await time.increase(GRACE + 1);
             await ownerWithdraw(); // 1000 back; deposited → 0
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             await settleToPool(100n);
             // cap = 10% of 100, not of 1100: a self-voucher for the whole new pool reverts
-            const grab = await signVoucher(assayWallet2, assayWallet2.address, 100n, 1n);
+            const grab = await signVoucher(spmlWallet2, spmlWallet2.address, 100n, 1n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet2.address, 100n, 1n, grab)
+                serving.connect(attacker).claim(provider1Address, spmlWallet2.address, 100n, 1n, grab)
             )
                 .to.be.revertedWithCustomError(serving, "VerifierCutExceedsCap")
                 .withArgs(100n, 10n);
-            const cut = await signVoucher(assayWallet2, assayWallet2.address, 10n, 1n);
+            const cut = await signVoucher(spmlWallet2, spmlWallet2.address, 10n, 1n);
             await expect(
-                serving.connect(attacker).claim(provider1Address, assayWallet2.address, 10n, 1n, cut)
-            ).to.changeEtherBalance(assayWallet2.address, 10n);
+                serving.connect(attacker).claim(provider1Address, spmlWallet2.address, 10n, 1n, cut)
+            ).to.changeEtherBalance(spmlWallet2.address, 10n);
         });
 
         it("E8: after a pool withdrawal the same signer cannot re-enter, so an unredeemed old voucher is not paid from new deposits", async () => {
             // nodeA holds a voucher for 100 and has redeemed 60 of it
-            const first = await signVoucher(assayWallet, nodeAAddress, 60n, 1n);
+            const first = await signVoucher(spmlWallet, nodeAAddress, 60n, 1n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 60n, 1n, first);
-            const held = await signVoucher(assayWallet, nodeAAddress, 100n, 2n);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
+            const held = await signVoucher(spmlWallet, nodeAAddress, 100n, 2n);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
             await time.increase(GRACE + 1);
             await ownerWithdraw(); // nodeA's unredeemed 40 goes back to the provider with the rest
 
-            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.true;
-            await expect(serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address))
-                .to.be.revertedWithCustomError(serving, "AssaySignerRetired")
-                .withArgs(provider1Address, assayWallet.address);
+            expect(await serving.isSpmlSignerRetired(provider1Address, spmlWallet.address)).to.be.true;
+            await expect(serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet.address))
+                .to.be.revertedWithCustomError(serving, "SpmlSignerRetired")
+                .withArgs(provider1Address, spmlWallet.address);
 
             // re-entry with a fresh key: the new deposits are out of the old voucher's reach
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             await settleToPool(500n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 100n, 2n, held)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
             expect(await poolOf(provider1Address)).to.equal(500n);
             // withdrawn[node] survives, so the new signer carries on from 60
-            const next = await signVoucher(assayWallet2, nodeAAddress, 90n, 3n);
+            const next = await signVoucher(spmlWallet2, nodeAAddress, 90n, 3n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 90n, 3n, next)
             ).to.changeEtherBalance(nodeA, 30n);
         });
 
         it("E9: a withdrawal retires every earlier signer, not only the last one (A -> B -> exit -> A)", async () => {
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             // before any withdrawal, going back to A is allowed: the money never left the pool
-            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.false;
-            await serving.connect(owner).clearAssaySigner(provider1Address);
+            expect(await serving.isSpmlSignerRetired(provider1Address, spmlWallet.address)).to.be.false;
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
             await time.increase(GRACE + 1);
             await ownerWithdraw();
-            for (const w of [assayWallet, assayWallet2]) {
+            for (const w of [spmlWallet, spmlWallet2]) {
                 await expect(
-                    serving.connect(owner).setAssaySigner(provider1Address, w.address)
-                ).to.be.revertedWithCustomError(serving, "AssaySignerRetired");
+                    serving.connect(owner).setSpmlSigner(provider1Address, w.address)
+                ).to.be.revertedWithCustomError(serving, "SpmlSignerRetired");
             }
             // retirement is per provider
-            expect(await serving.isAssaySignerRetired(attacker.address, assayWallet.address)).to.be.false;
+            expect(await serving.isSpmlSignerRetired(attacker.address, spmlWallet.address)).to.be.false;
         });
 
         it("E10: exit and re-entry without a withdrawal keeps the signer and its old vouchers", async () => {
-            const held = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
+            const held = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
             await time.increase(GRACE + 1);
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet.address);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, held)
             ).to.changeEtherBalance(nodeA, 300n);
@@ -931,36 +931,36 @@ describe("Assay Payout", () => {
     });
 
     describe("Provider consent", () => {
-        // `attacker` stands in for a second provider that never asked for assay mode
-        it("C1: the owner cannot take a provider into assay mode without its opt-in", async () => {
-            expect(await serving.isAssayOptedIn(attacker.address)).to.be.false;
-            await expect(serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address))
-                .to.be.revertedWithCustomError(serving, "AssayNotOptedIn")
+        // `attacker` stands in for a second provider that never asked for spml mode
+        it("C1: the owner cannot take a provider into spml mode without its opt-in", async () => {
+            expect(await serving.isSpmlOptedIn(attacker.address)).to.be.false;
+            await expect(serving.connect(owner).setSpmlSigner(attacker.address, spmlWallet.address))
+                .to.be.revertedWithCustomError(serving, "SpmlNotOptedIn")
                 .withArgs(attacker.address);
             // nobody opts in for someone else: the owner's call records the owner
-            await serving.connect(owner).optInAssay();
+            await serving.connect(owner).optInSpml();
             await expect(
-                serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address)
-            ).to.be.revertedWithCustomError(serving, "AssayNotOptedIn");
+                serving.connect(owner).setSpmlSigner(attacker.address, spmlWallet.address)
+            ).to.be.revertedWithCustomError(serving, "SpmlNotOptedIn");
 
-            await expect(serving.connect(attacker).optInAssay())
-                .to.emit(serving, "AssayOptedIn")
+            await expect(serving.connect(attacker).optInSpml())
+                .to.emit(serving, "SpmlOptedIn")
                 .withArgs(attacker.address);
-            expect(await serving.isAssayOptedIn(attacker.address)).to.be.true;
-            await serving.connect(owner).setAssaySigner(attacker.address, assayWallet.address);
-            expect((await serving.getAssayPayoutInfo(attacker.address)).signer).to.equal(assayWallet.address);
+            expect(await serving.isSpmlOptedIn(attacker.address)).to.be.true;
+            await serving.connect(owner).setSpmlSigner(attacker.address, spmlWallet.address);
+            expect((await serving.getSpmlPayoutInfo(attacker.address)).signer).to.equal(spmlWallet.address);
         });
 
         it("C2: the opt-in is permanent: rotation, exit and re-entry need no second one", async () => {
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
-            expect(await serving.isAssayOptedIn(provider1Address)).to.be.true;
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
+            expect(await serving.isSpmlOptedIn(provider1Address)).to.be.true;
             const third = new ethers.Wallet("0x" + "33".repeat(32));
-            await serving.connect(owner).setAssaySigner(provider1Address, third.address);
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(third.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, third.address);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(third.address);
         });
 
-        // A provider that entered assay mode before optInAssay existed (the state an in-place
+        // A provider that entered spml mode before optInSpml existed (the state an in-place
         // upgrade leaves behind): signer set, flag unset. No call can produce it any more, so
         // the flag is cleared in storage; the helper checks through the view that it hit it.
         async function forgetOptIn(provider: string) {
@@ -973,39 +973,39 @@ describe("Assay Payout", () => {
                 );
                 if (BigInt(await ethers.provider.getStorage(target, slot)) !== 1n) continue;
                 await ethers.provider.send("hardhat_setStorageAt", [target, slot, ethers.ZeroHash]);
-                if (!(await serving.isAssayOptedIn(provider))) return;
+                if (!(await serving.isSpmlOptedIn(provider))) return;
                 await ethers.provider.send("hardhat_setStorageAt", [target, slot, ethers.zeroPadValue("0x01", 32)]);
             }
-            throw new Error("assayOptIn slot not found");
+            throw new Error("spmlOptIn slot not found");
         }
 
-        it("C3: a provider already in assay mode needs no opt-in to be rotated or revoked to a new signer", async () => {
+        it("C3: a provider already in spml mode needs no opt-in to be rotated or revoked to a new signer", async () => {
             await forgetOptIn(provider1Address);
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet.address);
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address); // re-set no-op
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(spmlWallet.address);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet.address); // re-set no-op
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             const third = new ethers.Wallet("0x" + "33".repeat(32));
-            await serving.connect(owner).revokeAssaySigner(provider1Address, third.address);
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(third.address);
+            await serving.connect(owner).revokeSpmlSigner(provider1Address, third.address);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(third.address);
         });
 
         it("C4: once such a provider is cleared, neither set nor a revoke replacement re-enters it without its opt-in", async () => {
             await forgetOptIn(provider1Address);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
-            await expect(serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address))
-                .to.be.revertedWithCustomError(serving, "AssayNotOptedIn")
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
+            await expect(serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address))
+                .to.be.revertedWithCustomError(serving, "SpmlNotOptedIn")
                 .withArgs(provider1Address);
             // old signer still in its grace: a replacement would be an entry
-            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, assayWallet2.address))
-                .to.be.revertedWithCustomError(serving, "AssayNotOptedIn")
+            await expect(serving.connect(owner).revokeSpmlSigner(provider1Address, spmlWallet2.address))
+                .to.be.revertedWithCustomError(serving, "SpmlNotOptedIn")
                 .withArgs(provider1Address);
             // the emergency stop itself never needs the provider
-            await serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress);
-            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.true;
+            await serving.connect(owner).revokeSpmlSigner(provider1Address, ethers.ZeroAddress);
+            expect(await serving.isSpmlSignerRetired(provider1Address, spmlWallet.address)).to.be.true;
 
-            await serving.connect(provider1).optInAssay();
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
-            expect((await serving.getAssayPayoutInfo(provider1Address)).signer).to.equal(assayWallet2.address);
+            await serving.connect(provider1).optInSpml();
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).signer).to.equal(spmlWallet2.address);
         });
     });
 
@@ -1015,14 +1015,14 @@ describe("Assay Payout", () => {
         });
 
         it("K1: revoke with a replacement: the old key stops paying in that block, the new key pays", async () => {
-            const stolen = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, assayWallet2.address))
-                .to.emit(serving, "AssaySignerRevoked")
-                .withArgs(provider1Address, assayWallet.address, ethers.ZeroAddress)
-                .and.to.emit(serving, "AssaySignerUpdated")
-                .withArgs(provider1Address, assayWallet.address, assayWallet2.address, 0n);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
-            expect(info.signer).to.equal(assayWallet2.address);
+            const stolen = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await expect(serving.connect(owner).revokeSpmlSigner(provider1Address, spmlWallet2.address))
+                .to.emit(serving, "SpmlSignerRevoked")
+                .withArgs(provider1Address, spmlWallet.address, ethers.ZeroAddress)
+                .and.to.emit(serving, "SpmlSignerUpdated")
+                .withArgs(provider1Address, spmlWallet.address, spmlWallet2.address, 0n);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
+            expect(info.signer).to.equal(spmlWallet2.address);
             expect(info.prevSigner).to.equal(ethers.ZeroAddress);
             expect(info.prevSignerDeadline).to.equal(0n);
 
@@ -1030,23 +1030,23 @@ describe("Assay Payout", () => {
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, stolen)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
             // the replacement re-issues the same cumulative: the honest node loses nothing
-            const reissued = await signVoucher(assayWallet2, nodeAAddress, 300n, 1n);
+            const reissued = await signVoucher(spmlWallet2, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, reissued)
             ).to.changeEtherBalance(nodeA, 300n);
-            // still in assay mode: settlements keep pooling
+            // still in spml mode: settlements keep pooling
             await settleToPool(100n);
             expect(await poolOf(provider1Address)).to.equal(800n);
         });
 
         it("K2: revoke also ends a rotated-out signer's running grace", async () => {
-            const fromA = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
+            const fromA = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
             const third = new ethers.Wallet("0x" + "33".repeat(32));
-            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, third.address))
-                .to.emit(serving, "AssaySignerRevoked")
-                .withArgs(provider1Address, assayWallet2.address, assayWallet.address);
-            const fromB = await signVoucher(assayWallet2, nodeBAddress, 200n, 1n);
+            await expect(serving.connect(owner).revokeSpmlSigner(provider1Address, third.address))
+                .to.emit(serving, "SpmlSignerRevoked")
+                .withArgs(provider1Address, spmlWallet2.address, spmlWallet.address);
+            const fromB = await signVoucher(spmlWallet2, nodeBAddress, 200n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, fromA)
             ).to.be.revertedWithCustomError(serving, "InvalidVoucherSignature");
@@ -1056,47 +1056,47 @@ describe("Assay Payout", () => {
             expect(await poolOf(provider1Address)).to.equal(1000n);
         });
 
-        it("K3: revoke without a replacement leaves assay mode and still locks the pool for the grace", async () => {
-            const stolen = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            const tx = await serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
+        it("K3: revoke without a replacement leaves spml mode and still locks the pool for the grace", async () => {
+            const stolen = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            const tx = await serving.connect(owner).revokeSpmlSigner(provider1Address, ethers.ZeroAddress);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.signer).to.equal(ethers.ZeroAddress);
             expect(info.prevSigner).to.equal(ethers.ZeroAddress);
             expect(info.prevSignerDeadline).to.equal(BigInt(await time.latest()) + BigInt(GRACE));
             // the event carries the pool-lock deadline, not 0
             await expect(tx)
-                .to.emit(serving, "AssaySignerUpdated")
-                .withArgs(provider1Address, assayWallet.address, ethers.ZeroAddress, info.prevSignerDeadline);
+                .to.emit(serving, "SpmlSignerUpdated")
+                .withArgs(provider1Address, spmlWallet.address, ethers.ZeroAddress, info.prevSignerDeadline);
 
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, stolen)
-            ).to.be.revertedWithCustomError(serving, "AssaySignerNotSet");
+            ).to.be.revertedWithCustomError(serving, "SpmlSignerNotSet");
             // no revoke-then-withdraw in one go
             await expect(
-                serving.connect(owner).withdrawAssayPool(provider1Address)
-            ).to.be.revertedWithCustomError(serving, "AssayPoolLocked");
+                serving.connect(owner).withdrawSpmlPool(provider1Address)
+            ).to.be.revertedWithCustomError(serving, "SpmlPoolLocked");
             // the owner can still put a clean signer in and let nodes redeem
-            await serving.connect(owner).setAssaySigner(provider1Address, assayWallet2.address);
-            const reissued = await signVoucher(assayWallet2, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet2.address);
+            const reissued = await signVoucher(spmlWallet2, nodeAAddress, 300n, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, reissued)
             ).to.changeEtherBalance(nodeA, 300n);
         });
 
         it("K4: revoking a cleared signer inside its grace ends the grace but not the pool lock deadline", async () => {
-            const inFlight = await signVoucher(assayWallet, nodeAAddress, 300n, 1n);
-            await serving.connect(owner).clearAssaySigner(provider1Address);
-            const deadline = (await serving.getAssayPayoutInfo(provider1Address)).prevSignerDeadline;
+            const inFlight = await signVoucher(spmlWallet, nodeAAddress, 300n, 1n);
+            await serving.connect(owner).clearSpmlSigner(provider1Address);
+            const deadline = (await serving.getSpmlPayoutInfo(provider1Address)).prevSignerDeadline;
             await time.increase(3600);
-            await expect(serving.connect(owner).revokeAssaySigner(provider1Address, ethers.ZeroAddress))
-                .to.emit(serving, "AssaySignerUpdated")
+            await expect(serving.connect(owner).revokeSpmlSigner(provider1Address, ethers.ZeroAddress))
+                .to.emit(serving, "SpmlSignerUpdated")
                 .withArgs(provider1Address, ethers.ZeroAddress, ethers.ZeroAddress, deadline);
-            expect((await serving.getAssayPayoutInfo(provider1Address)).prevSignerDeadline).to.equal(deadline);
+            expect((await serving.getSpmlPayoutInfo(provider1Address)).prevSignerDeadline).to.equal(deadline);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, 300n, 1n, inFlight)
-            ).to.be.revertedWithCustomError(serving, "AssaySignerNotSet");
+            ).to.be.revertedWithCustomError(serving, "SpmlSignerNotSet");
             await time.increase(GRACE);
-            await expect(serving.connect(owner).withdrawAssayPool(provider1Address)).to.changeEtherBalance(
+            await expect(serving.connect(owner).withdrawSpmlPool(provider1Address)).to.changeEtherBalance(
                 provider1,
                 1000n
             );
@@ -1104,25 +1104,25 @@ describe("Assay Payout", () => {
 
         it("K5: a revoked signer cannot come back, as a signer or as a replacement; guards", async () => {
             await expect(
-                serving.connect(owner).revokeAssaySigner(provider1Address, assayWallet.address)
-            ).to.be.revertedWithCustomError(serving, "AssaySignerRetired");
-            await serving.connect(owner).revokeAssaySigner(provider1Address, assayWallet2.address);
-            expect(await serving.isAssaySignerRetired(provider1Address, assayWallet.address)).to.be.true;
+                serving.connect(owner).revokeSpmlSigner(provider1Address, spmlWallet.address)
+            ).to.be.revertedWithCustomError(serving, "SpmlSignerRetired");
+            await serving.connect(owner).revokeSpmlSigner(provider1Address, spmlWallet2.address);
+            expect(await serving.isSpmlSignerRetired(provider1Address, spmlWallet.address)).to.be.true;
             await expect(
-                serving.connect(owner).setAssaySigner(provider1Address, assayWallet.address)
-            ).to.be.revertedWithCustomError(serving, "AssaySignerRetired");
+                serving.connect(owner).setSpmlSigner(provider1Address, spmlWallet.address)
+            ).to.be.revertedWithCustomError(serving, "SpmlSignerRetired");
 
             await expect(
-                serving.connect(provider1).revokeAssaySigner(provider1Address, ethers.ZeroAddress)
+                serving.connect(provider1).revokeSpmlSigner(provider1Address, ethers.ZeroAddress)
             ).to.be.revertedWith("Ownable: caller is not the owner");
             await expect(
-                serving.connect(owner).revokeAssaySigner(attacker.address, ethers.ZeroAddress)
-            ).to.be.revertedWithCustomError(serving, "AssaySignerNotSet");
+                serving.connect(owner).revokeSpmlSigner(attacker.address, ethers.ZeroAddress)
+            ).to.be.revertedWithCustomError(serving, "SpmlSignerNotSet");
         });
     });
 
     describe("Cross-language parity (testplan §7)", () => {
-        it("a voucher signed by the Python assay (eth_account) recovers to the same signer", () => {
+        it("a voucher signed by the Python spml (eth_account) recovers to the same signer", () => {
             // Vector produced by pipeline/tests/test_payout.py::test_parity_vector_stable —
             // regenerate there if the voucher encoding ever changes.
             const pySig =
@@ -1156,22 +1156,22 @@ describe("Assay Payout", () => {
 
         it("N1: cumulative = uint256 max cannot overflow, only fail solvency", async () => {
             const max = ethers.MaxUint256;
-            const sig = await signVoucher(assayWallet, nodeAAddress, max, 1n);
+            const sig = await signVoucher(spmlWallet, nodeAAddress, max, 1n);
             await expect(
                 serving.connect(nodeA).claim(provider1Address, nodeAAddress, max, 1n, sig)
-            ).to.be.revertedWithCustomError(serving, "InsufficientAssayPool");
+            ).to.be.revertedWithCustomError(serving, "InsufficientSpmlPool");
         });
 
         it("N3/INV6: interleaved nodes stay independent", async () => {
-            const sigA1 = await signVoucher(assayWallet, nodeAAddress, 100n, 1n);
-            const sigB1 = await signVoucher(assayWallet, nodeBAddress, 50n, 1n);
-            const sigA2 = await signVoucher(assayWallet, nodeAAddress, 250n, 2n);
+            const sigA1 = await signVoucher(spmlWallet, nodeAAddress, 100n, 1n);
+            const sigB1 = await signVoucher(spmlWallet, nodeBAddress, 50n, 1n);
+            const sigA2 = await signVoucher(spmlWallet, nodeAAddress, 250n, 2n);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 100n, 1n, sigA1);
             await serving.connect(nodeB).claim(provider1Address, nodeBAddress, 50n, 1n, sigB1);
             await serving.connect(nodeA).claim(provider1Address, nodeAAddress, 250n, 2n, sigA2);
-            expect(await serving.assayWithdrawnOf(provider1Address, nodeAAddress)).to.equal(250n);
-            expect(await serving.assayWithdrawnOf(provider1Address, nodeBAddress)).to.equal(50n);
-            const info = await serving.getAssayPayoutInfo(provider1Address);
+            expect(await serving.spmlWithdrawnOf(provider1Address, nodeAAddress)).to.equal(250n);
+            expect(await serving.spmlWithdrawnOf(provider1Address, nodeBAddress)).to.equal(50n);
+            const info = await serving.getSpmlPayoutInfo(provider1Address);
             expect(info.deposited).to.equal(info.pool + info.totalPaid);
         });
     });
