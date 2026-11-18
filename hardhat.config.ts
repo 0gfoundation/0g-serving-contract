@@ -11,6 +11,10 @@ const ZG_TESTNET_V4_PRIVATE_KEY = process.env.ZG_TESTNET_V4_PRIVATE_KEY || "";
 const ZG_TESTNET_DEV_PRIVATE_KEY = process.env.ZG_TESTNET_DEV_PRIVATE_KEY || "";
 const ZG_MAINNET_PRIVATE_KEY = process.env.ZG_MAINNET_PRIVATE_KEY || "";
 
+// Only pass keys that are actually set: hardhat rejects empty strings in
+// `accounts` at config-load time, which breaks every network at once.
+const accountsOf = (key: string) => (key ? [key] : []);
+
 import "./src/tasks/upgrade";
 
 /** @type import('hardhat/config').HardhatUserConfig */
@@ -73,23 +77,35 @@ const config: HardhatUserConfig = {
                     privateKey: "7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
                     balance: "1000000000000000000000",
                 },
+                {
+                    privateKey: "47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
+                    balance: "1000000000000000000000",
+                },
+                {
+                    privateKey: "92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e",
+                    balance: "1000000000000000000000",
+                },
+                {
+                    privateKey: "4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
+                    balance: "1000000000000000000000",
+                },
             ],
         },
         zgTestnetV4: {
             url: "https://evmrpc-testnet.0g.ai",
-            accounts: [ZG_TESTNET_V4_PRIVATE_KEY],
+            accounts: accountsOf(ZG_TESTNET_V4_PRIVATE_KEY),
             chainId: 16602,
             gasPrice: 12000000000,
         },
         zgTestnetDev: {
             url: "https://evmrpc-testnet.0g.ai",
-            accounts: [ZG_TESTNET_DEV_PRIVATE_KEY],
+            accounts: accountsOf(ZG_TESTNET_DEV_PRIVATE_KEY),
             chainId: 16602,
             gasPrice: 12000000000,
         },        
         zgMainnet: {
             url: "https://evmrpc.0g.ai",
-            accounts: [ZG_MAINNET_PRIVATE_KEY],
+            accounts: accountsOf(ZG_MAINNET_PRIVATE_KEY),
             chainId: 16661,
             gasPrice: 12000000000,
         },
