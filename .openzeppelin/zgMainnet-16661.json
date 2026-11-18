@@ -112,8 +112,8 @@
         "namespaces": {}
       }
     },
-    "1b64b534804a347a55c9aad5e18b69747e5cfc2bbfe505301129fa6b648322a7": {
-      "address": "0x1c0A264f5ae6cfC37E8695442fB139efD884Ca48",
+    "3359afb8e528384c92b960471c0234661be24efc65f782536018152d4b890dfb": {
+      "address": "0xF028c2dAD7CccD6c385b573602C6358afEA48Ad5",
       "layout": {
         "solcVersion": "0.8.22",
         "storage": [
